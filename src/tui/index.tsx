@@ -55,6 +55,12 @@ function App() {
         handle.stop();
         return;
       }
+      // Seed initial state — tailTranscript already drained the file once
+      // before returning, but its first notify() fires before any listener
+      // is attached, so we'd otherwise wait for the next appended line.
+      lastTotalRef.current = totalTokens(handle.stats.totals);
+      lastSampleAtRef.current = Date.now();
+      setStats({ ...handle.stats });
       handle.onUpdate((s) => {
         const tot = totalTokens(s.totals);
         const delta = Math.max(0, tot - lastTotalRef.current);
