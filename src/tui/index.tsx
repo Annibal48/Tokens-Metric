@@ -18,6 +18,7 @@ import {
 import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js';
 import { anonymizePath } from '../core/privacy.js';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
+import pkg from '../../package.json' assert { type: 'json' };
 import { bar, sparklineCells } from './bars.js';
 
 const OPTS = parseArgs(process.argv);
@@ -209,7 +210,7 @@ function Header({
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
       <Box>
         <Text bold color="cyan">▌ tokens-metric </Text>
-        <Text dimColor>v0.1.0 — real-time Claude Code usage</Text>
+        <Text dimColor>v{pkg.version} — real-time Claude Code usage</Text>
       </Box>
       <Box marginTop={0}>
         <Text>
