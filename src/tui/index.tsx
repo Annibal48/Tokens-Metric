@@ -17,8 +17,11 @@ import {
 } from '../core/history.js';
 import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js';
 import { anonymizePath } from '../core/privacy.js';
+import { createRequire } from 'node:module';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
-import pkg from '../../package.json' assert { type: 'json' };
+
+const require = createRequire(import.meta.url);
+const pkg = require('../../package.json') as { version: string };
 import { bar, sparklineCells } from './bars.js';
 
 const OPTS = parseArgs(process.argv);
