@@ -4,11 +4,21 @@ import { render, Box, Text, useApp, useInput } from 'ink';
 import { findActiveTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
-import { estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
+import { categoryCostUSD, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
+import {
+  buildHistory,
+  bucketCostUSD,
+  bucketTokens,
+  bucketTopModel,
+  getTodaySessions,
+  type BucketStats,
+  type HistorySnapshot,
+  type SessionSummary,
+} from '../core/history.js';
 import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js';
-import { anonymizePath, maskUserId } from '../core/privacy.js';
+import { anonymizePath } from '../core/privacy.js';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
-import { bar, sparkline } from './bars.js';
+import { bar, sparklineCells } from './bars.js';
 
 const OPTS = parseArgs(process.argv);
 if (OPTS.help) {
@@ -17,6 +27,7 @@ if (OPTS.help) {
 }
 
 const RESCAN_MS = 3_000;
+const HISTORY_REFRESH_MS = 60_000;
 const SPARK_WIDTH = 32;
 const BAR_WIDTH = 20;
 
@@ -25,11 +36,12 @@ function App() {
   const [auth] = useState<AuthInfo>(() => detectAuth());
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
-  const [rate, setRate] = useState<number>(0);
   const [series, setSeries] = useState<number[]>(() => Array(SPARK_WIDTH).fill(0));
   const [now, setNow] = useState<number>(Date.now());
+  const [lastTailAt, setLastTailAt] = useState<number | null>(null);
+  const [history, setHistory] = useState<HistorySnapshot | null>(null);
+  const startedAtRef = useRef<number>(Date.now());
   const lastTotalRef = useRef(0);
-  const lastSampleAtRef = useRef(Date.now());
 
   // useInput requires raw mode (interactive TTY). Skip it when stdin is piped
   // or otherwise non-interactive, so `node dist/tui/index.js | cat` still
@@ -41,6 +53,27 @@ function App() {
       if (input === 'q' || key.escape || (key.ctrl && input === 'c')) exit();
     });
   }
+
+  // Historical aggregate over all transcripts. Refreshed on an interval —
+  // the live session is already shown in SessionPanel, so minute-grain
+  // accuracy on today's bucket is enough and keeps full parses out of the
+  // hot path.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      buildHistory()
+        .then((h) => {
+          if (!cancelled) setHistory(h);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const t = setInterval(refresh, HISTORY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   // Wall-clock tick + sparkline slot rotation (1 Hz).
   useEffect(() => {
@@ -67,13 +100,12 @@ function App() {
       // before returning, but its first notify() fires before any listener
       // is attached, so we'd otherwise wait for the next appended line.
       lastTotalRef.current = totalTokens(handle.stats.totals);
-      lastSampleAtRef.current = Date.now();
+      setLastTailAt(Date.now());
       setStats({ ...handle.stats });
       handle.onUpdate((s) => {
+        setLastTailAt(Date.now());
         const tot = totalTokens(s.totals);
         const delta = Math.max(0, tot - lastTotalRef.current);
-        const dt = (Date.now() - lastSampleAtRef.current) / 60_000;
-        if (dt > 0 && delta > 0) setRate(delta / dt);
         if (delta > 0) {
           setSeries((arr) => {
             const next = arr.slice();
@@ -82,7 +114,6 @@ function App() {
           });
         }
         lastTotalRef.current = tot;
-        lastSampleAtRef.current = Date.now();
         setStats({ ...s });
       });
     }
@@ -102,16 +133,37 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const transcripts = listTranscripts().slice(0, 5);
+  const allTranscripts = listTranscripts();
+  const transcripts = allTranscripts.slice(0, 5);
+  const today = countToday(allTranscripts, now);
+  const ratePerSec = series.reduce((a, b) => a + b, 0) / SPARK_WIDTH;
+  const todaySessions = getTodaySessions(now, transcriptPath);
 
   return (
     <Box flexDirection="column" padding={1}>
-      <Header auth={auth} />
+      <Header
+        auth={auth}
+        sessionsToday={today.sessions}
+        projectsToday={today.projects}
+        lastTailAt={lastTailAt}
+        startedAt={startedAtRef.current}
+        now={now}
+      />
 
       <Box marginTop={1} flexDirection="row" gap={1}>
-        <SessionPanel stats={stats} rate={rate} now={now} series={series} />
+        <SessionPanel stats={stats} ratePerSec={ratePerSec} now={now} series={series} />
         <BreakdownPanel stats={stats} />
       </Box>
+
+      <Box marginTop={1}>
+        <HistoryPanel history={history} />
+      </Box>
+
+      {todaySessions.length > 0 && (
+        <Box marginTop={1}>
+          <TodaySessionsPanel sessions={todaySessions} now={now} />
+        </Box>
+      )}
 
       <Box marginTop={1}>
         <TranscriptsPanel
@@ -133,10 +185,25 @@ function App() {
 }
 
 // ── Header ───────────────────────────────────────────────────────────────────
-function Header({ auth }: { auth: AuthInfo }) {
+function Header({
+  auth,
+  sessionsToday,
+  projectsToday,
+  lastTailAt,
+  startedAt,
+  now,
+}: {
+  auth: AuthInfo;
+  sessionsToday: number;
+  projectsToday: number;
+  lastTailAt: number | null;
+  startedAt: number;
+  now: number;
+}) {
   const ok = auth.installed && auth.loggedIn;
   const dot = ok ? 'green' : auth.installed ? 'yellow' : 'red';
-  const planChip = planChipFor(auth);
+  const tailLabel = lastTailAt ? `updated ${timeAgo(now - lastTailAt)} ago` : 'waiting…';
+  const tailColor = !lastTailAt ? 'gray' : now - lastTailAt < 10_000 ? 'green' : 'yellow';
 
   return (
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
@@ -148,47 +215,49 @@ function Header({ auth }: { auth: AuthInfo }) {
         <Text>
           <Text color={dot}>●</Text>{' '}
           {auth.installed ? 'Claude Code detected' : 'Claude Code NOT detected'}
-          {'   '}
-          <Text {...planChip.style}>{planChip.label}</Text>
-          {auth.userIdShort && (
-            <Text dimColor>{`   user ${maskUserId(auth.userIdShort, OPTS.reveal)}`}</Text>
-          )}
+          <Text dimColor>{'   ·   '}</Text>
+          <Text>{sessionsToday}</Text>
+          <Text dimColor>{` ${plural(sessionsToday, 'session', 'sessions')} · `}</Text>
+          <Text>{projectsToday}</Text>
+          <Text dimColor>{` ${plural(projectsToday, 'project', 'projects')} today`}</Text>
         </Text>
       </Box>
-      {auth.hint && (
-        <Box>
-          <Text dimColor>↳ {auth.hint}</Text>
-        </Box>
-      )}
+      <Box>
+        <Text dimColor>watching ~/.claude/projects · </Text>
+        <Text color={tailColor}>{tailLabel}</Text>
+        <Text dimColor>{'   ·   uptime '}</Text>
+        <Text>{timeAgo(now - startedAt)}</Text>
+      </Box>
     </Box>
   );
 }
 
-function planChipFor(auth: AuthInfo): { label: string; style: { color?: string; bold?: boolean; dimColor?: boolean } } {
-  if (!auth.loggedIn) return { label: ' LOGGED-OUT ', style: { color: 'red', bold: true } };
-  switch (auth.planHint) {
-    case 'api':
-      return { label: ' API ', style: { color: 'yellow', bold: true } };
-    case 'team-or-enterprise':
-      return { label: ' TEAM / ENTERPRISE ', style: { color: 'magenta', bold: true } };
-    case 'paid':
-      return { label: ' PRO / MAX ', style: { color: 'green', bold: true } };
-    case 'free':
-      return { label: ' FREE ', style: { color: 'blue', bold: true } };
-    default:
-      return { label: ' SUBSCRIPTION ', style: { color: 'cyan', bold: true } };
+function countToday(
+  transcripts: { mtimeMs: number; cwd: string }[],
+  now: number,
+): { sessions: number; projects: number } {
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+  const cutoff = startOfDay.getTime();
+  const projects = new Set<string>();
+  let sessions = 0;
+  for (const t of transcripts) {
+    if (t.mtimeMs < cutoff) continue;
+    sessions++;
+    projects.add(t.cwd);
   }
+  return { sessions, projects: projects.size };
 }
 
 // ── Session panel ────────────────────────────────────────────────────────────
 function SessionPanel({
   stats,
-  rate,
+  ratePerSec,
   now,
   series,
 }: {
   stats: SessionStats | null;
-  rate: number;
+  ratePerSec: number;
   now: number;
   series: number[];
 }) {
@@ -201,7 +270,12 @@ function SessionPanel({
       flexGrow={1}
       minWidth={42}
     >
-      <Text bold color="green">Active session</Text>
+      <Text bold color="green">
+        {'Active session'}
+        {stats?.startedAt ? (
+          <Text color="green" bold={false}>{` · since ${fmtTime(stats.startedAt)}`}</Text>
+        ) : null}
+      </Text>
       {!stats ? (
         <Text dimColor>Waiting for a Claude Code session…</Text>
       ) : (
@@ -241,17 +315,37 @@ function SessionPanel({
                 <Text dimColor>~{fmtUSD(cost)} API-equivalent</Text>
               ) : null;
             })()}
-            <Text>
-              <Text bold>~ </Text>
-              <Text color="yellow">{fmtNumber(Math.round(rate))}</Text>
-              <Text dimColor> tok/min</Text>
-            </Text>
+            {Math.round(ratePerSec) > 0 && (
+              <Text>
+                <Text bold>~ </Text>
+                <Text color="yellow">{fmtNumber(Math.round(ratePerSec))}</Text>
+                <Text dimColor> tok/s (avg last {SPARK_WIDTH}s)</Text>
+              </Text>
+            )}
           </Box>
 
-          <Box marginTop={1} flexDirection="column">
-            <Text dimColor>activity (last {SPARK_WIDTH}s)</Text>
-            <Text color="yellow">{sparkline(series, SPARK_WIDTH)}</Text>
-          </Box>
+          {series.some((n) => n > 0) ? (
+            <Box marginTop={1} flexDirection="column">
+              <Text>
+                <Text dimColor>activity (last {SPARK_WIDTH}s)</Text>
+                <Text dimColor>   peak </Text>
+                <Text bold color="yellow">{fmtNumber(Math.max(...series))}</Text>
+                <Text dimColor>/s</Text>
+              </Text>
+              <Text>
+                {sparklineCells(series, SPARK_WIDTH).map((cell, i) => (
+                  <Text key={i} color={intensityColor(cell.intensity)}>
+                    {cell.char}
+                  </Text>
+                ))}
+              </Text>
+              <Text dimColor>{axisLabel(SPARK_WIDTH)}</Text>
+            </Box>
+          ) : (
+            <Box marginTop={1}>
+              <Text dimColor>idle — no activity in the last {SPARK_WIDTH}s</Text>
+            </Box>
+          )}
         </>
       )}
     </Box>
@@ -282,22 +376,77 @@ function BreakdownPanel({ stats }: { stats: SessionStats | null }) {
             u.cache_creation_input_tokens,
             u.cache_read_input_tokens,
           );
+          const total = totalTokens(u);
+          const model = stats.lastModel ?? '';
+          const cacheDenom = u.input_tokens + u.cache_read_input_tokens;
+          const hitRatio = cacheDenom > 0 ? u.cache_read_input_tokens / cacheDenom : null;
           return (
             <Box flexDirection="column">
-              <BarRow label="Input    " value={u.input_tokens} max={max} color="cyan" />
-              <BarRow label="Output   " value={u.output_tokens} max={max} color="green" />
-              <BarRow label="C. write " value={u.cache_creation_input_tokens} max={max} color="yellow" />
-              <BarRow label="C. read  " value={u.cache_read_input_tokens} max={max} color="magenta" />
-              <Box marginTop={1} flexDirection="column">
-                <Text dimColor>By model</Text>
-                {Object.entries(stats.byModel).map(([m, mu]) => (
-                  <Text key={m}>
-                    <Text color="cyan">{shortModel(m)}</Text>
-                    <Text dimColor>  Σ </Text>
-                    <Text>{fmtNumber(totalTokens(mu))}</Text>
+              <BarRow
+                label="Input    "
+                value={u.input_tokens}
+                max={max}
+                total={total}
+                color="cyan"
+                cost={categoryCostUSD(model, 'input', u.input_tokens)}
+              />
+              <BarRow
+                label="Output   "
+                value={u.output_tokens}
+                max={max}
+                total={total}
+                color="green"
+                cost={categoryCostUSD(model, 'output', u.output_tokens)}
+              />
+              <BarRow
+                label="C. write "
+                value={u.cache_creation_input_tokens}
+                max={max}
+                total={total}
+                color="yellow"
+                cost={categoryCostUSD(model, 'cacheWrite', u.cache_creation_input_tokens)}
+              />
+              <BarRow
+                label="C. read  "
+                value={u.cache_read_input_tokens}
+                max={max}
+                total={total}
+                color="magenta"
+                cost={categoryCostUSD(model, 'cacheRead', u.cache_read_input_tokens)}
+              />
+              {hitRatio !== null && (
+                <Box marginTop={1}>
+                  <Text>
+                    <Text bold>Cache hit</Text>
+                    <Text dimColor> · </Text>
+                    <Text color={hitRatio > 0.9 ? 'green' : hitRatio > 0.6 ? 'yellow' : 'red'}>
+                      {(hitRatio * 100).toFixed(1)}%
+                    </Text>
+                    <Text dimColor>  (cache read / (input + cache read))</Text>
                   </Text>
-                ))}
-              </Box>
+                </Box>
+              )}
+              {Object.keys(stats.byModel).length > 1 && (
+                <Box marginTop={1} flexDirection="column">
+                  <Text dimColor>By model</Text>
+                  {Object.entries(stats.byModel).map(([m, mu]) => {
+                    const c = estimateCostUSD(m, mu);
+                    return (
+                      <Text key={m}>
+                        <Text color="cyan">{shortModel(m)}</Text>
+                        <Text dimColor>  Σ </Text>
+                        <Text>{fmtNumber(totalTokens(mu))}</Text>
+                        {c !== null && (
+                          <>
+                            <Text dimColor>  ~</Text>
+                            <Text>{fmtUSD(c)}</Text>
+                          </>
+                        )}
+                      </Text>
+                    );
+                  })}
+                </Box>
+              )}
             </Box>
           );
         })()
@@ -310,20 +459,184 @@ function BarRow({
   label,
   value,
   max,
+  total,
   color,
+  cost,
 }: {
   label: string;
   value: number;
   max: number;
+  total: number;
   color: string;
+  cost: number | null;
 }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
   return (
     <Text>
       <Text bold>{label}</Text>
       <Text color={color}>{bar(value / max, BAR_WIDTH)}</Text>
-      <Text>  {fmtNumber(value)}</Text>
+      <Text>  {fmtNumber(value).padStart(7, ' ')}</Text>
+      <Text dimColor>{`  ${pct.toFixed(1).padStart(5, ' ')}%`}</Text>
+      {cost !== null && <Text dimColor>{`  ~${fmtUSD(cost)}`}</Text>}
     </Text>
   );
+}
+
+// ── History panel ────────────────────────────────────────────────────────────
+function HistoryPanel({ history }: { history: HistorySnapshot | null }) {
+  return (
+    <Box borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column" width="100%">
+      <Text bold color="magenta">Usage history</Text>
+      {!history ? (
+        <Text dimColor>Scanning ~/.claude/projects…</Text>
+      ) : history.scannedFiles === 0 ? (
+        <Text dimColor>No transcripts found.</Text>
+      ) : (
+        <>
+          <HistoryRow label="" today="Today" d7="7d" d30="30d" dim />
+          <HistoryRow
+            label="Tokens "
+            today={fmtNumber(bucketTokens(history.today))}
+            d7={fmtNumber(bucketTokens(history.d7))}
+            d30={fmtNumber(bucketTokens(history.d30))}
+          />
+          <HistoryRow
+            label="Cost~  "
+            today={fmtCost(bucketCostUSD(history.today))}
+            d7={fmtCost(bucketCostUSD(history.d7))}
+            d30={fmtCost(bucketCostUSD(history.d30))}
+          />
+          <HistoryRow
+            label="Sessions"
+            today={String(history.today.sessions.size)}
+            d7={String(history.d7.sessions.size)}
+            d30={String(history.d30.sessions.size)}
+          />
+          <HistoryRow
+            label="Top model"
+            today={fmtTopModel(history.today)}
+            d7={fmtTopModel(history.d7)}
+            d30={fmtTopModel(history.d30)}
+          />
+          <Box marginTop={1}>
+            <Text dimColor>
+              {`scanned ${history.scannedFiles} transcripts`}
+              {history.oldestMtimeMs !== null &&
+                ` · data since ${fmtDate(history.oldestMtimeMs)} (${daysAgo(
+                  history.oldestMtimeMs,
+                  history.generatedAt,
+                )} days)`}
+            </Text>
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+}
+
+function fmtDate(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function daysAgo(from: number, to: number): number {
+  return Math.max(0, Math.floor((to - from) / 86_400_000));
+}
+
+function HistoryRow({
+  label,
+  today,
+  d7,
+  d30,
+  dim,
+}: {
+  label: string;
+  today: string;
+  d7: string;
+  d30: string;
+  dim?: boolean;
+}) {
+  const col = (s: string) => s.padEnd(14, ' ');
+  return (
+    <Text dimColor={dim}>
+      <Text bold>{label.padEnd(10, ' ')}</Text>
+      <Text>{col(today)}</Text>
+      <Text>{col(d7)}</Text>
+      <Text>{col(d30)}</Text>
+    </Text>
+  );
+}
+
+function fmtCost(c: number | null): string {
+  return c === null ? '—' : fmtUSD(c);
+}
+
+function fmtTopModel(b: BucketStats): string {
+  const m = bucketTopModel(b);
+  return m ? shortModel(m) : '—';
+}
+
+// ── Today's sessions panel ───────────────────────────────────────────────────
+function TodaySessionsPanel({ sessions, now }: { sessions: SessionSummary[]; now: number }) {
+  return (
+    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" width="100%">
+      <Text bold color="cyan">Today&apos;s sessions</Text>
+      {sessions.map((s) => {
+        const tokens = Object.values(s.byModel).reduce(
+          (acc, u) => acc + totalTokens(u),
+          0,
+        );
+        const cost = Object.entries(s.byModel).reduce<number | null>((acc, [m, u]) => {
+          const c = estimateCostUSD(m, u);
+          if (c === null) return acc;
+          return (acc ?? 0) + c;
+        }, null);
+        const topModel = Object.entries(s.byModel).reduce<string | null>(
+          (best, [m, u]) =>
+            best === null || totalTokens(u) > totalTokens(s.byModel[best] ?? {} as any)
+              ? m
+              : best,
+          null,
+        );
+        const duration =
+          s.startedAt !== null && s.endedAt !== null
+            ? fmtDuration(s.endedAt - s.startedAt)
+            : null;
+
+        return (
+          <Text key={s.sessionId}>
+            <Text color={s.isActive ? 'green' : 'gray'}>{s.isActive ? '▶ ' : '  '}</Text>
+            <Text bold={s.isActive}>
+              {s.startedAt ? fmtTime(s.startedAt) : '??:??'}
+            </Text>
+            <Text dimColor>{'  '}</Text>
+            <Text wrap="truncate-middle" dimColor={!s.isActive}>
+              {OPTS.reveal ? (s.cwd ?? '—') : displayCwd(s.cwd)}
+            </Text>
+            <Text dimColor>{'  '}</Text>
+            <Text color="cyan">{topModel ? shortModel(topModel) : '—'}</Text>
+            <Text dimColor>{'  '}</Text>
+            <Text>{fmtNumber(tokens)}</Text>
+            {cost !== null && <Text dimColor>{`  ~${fmtUSD(cost)}`}</Text>}
+            {duration && <Text dimColor>{`  ${duration}`}</Text>}
+            {s.isActive && <Text color="green"> active</Text>}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
+function fmtDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${totalSec}s`;
 }
 
 // ── Transcripts panel ────────────────────────────────────────────────────────
@@ -348,7 +661,7 @@ function TranscriptsPanel({
             <Text key={t.path}>
               <Text color={isActive ? 'green' : 'gray'}>{isActive ? '▶ ' : '  '}</Text>
               <Text dimColor={!isActive} wrap="truncate-middle">
-                {OPTS.reveal ? t.cwd : anonymizePath(t.cwd)}
+                {OPTS.reveal ? t.cwd : displayCwd(t.cwd)}
               </Text>
               <Text dimColor>{`   ${timeAgo(now - t.mtimeMs)}`}</Text>
             </Text>
@@ -368,6 +681,42 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
       {v}
     </Text>
   );
+}
+
+function fmtTime(ms: number): string {
+  const d = new Date(ms);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
+}
+
+/**
+ * Like anonymizePath, but distinguishes the bare home directory from "no
+ * path" — a transcript whose cwd is $HOME would otherwise show as a lonely
+ * `~`, which looks like a bug.
+ */
+function displayCwd(cwd: string | undefined): string {
+  const out = anonymizePath(cwd);
+  if (out === '~') return '~ (home)';
+  return out;
+}
+
+function intensityColor(ratio: number): string {
+  if (ratio <= 0) return 'gray';
+  if (ratio < 0.34) return 'green';
+  if (ratio < 0.67) return 'yellow';
+  return 'red';
+}
+
+function axisLabel(width: number): string {
+  const left = `-${width}s`;
+  const right = 'now';
+  const gap = Math.max(1, width - left.length - right.length);
+  return `${left}${' '.repeat(gap)}${right}`;
 }
 
 function shortModel(m: string): string {
