@@ -27,16 +27,31 @@ const SPARK = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
  * series max. Returns empty cells when there's no data yet.
  */
 export function sparkline(values: number[], width: number): string {
-  if (width <= 0) return '';
+  return sparklineCells(values, width)
+    .map((c) => c.char)
+    .join('');
+}
+
+export interface SparkCell {
+  char: string;
+  /** 0..1 — fraction of the window's peak. 0 means empty/no data. */
+  intensity: number;
+}
+
+/**
+ * Per-cell version of `sparkline` so the caller can color each character
+ * individually based on intensity.
+ */
+export function sparklineCells(values: number[], width: number): SparkCell[] {
+  if (width <= 0) return [];
   const tail = values.slice(-width);
   const padded =
     tail.length < width ? Array(width - tail.length).fill(0).concat(tail) : tail;
   const max = Math.max(1, ...padded);
-  return padded
-    .map((v) => {
-      if (v <= 0) return ' ';
-      const idx = Math.min(SPARK.length - 1, Math.floor((v / max) * (SPARK.length - 1)));
-      return SPARK[idx];
-    })
-    .join('');
+  return padded.map((v) => {
+    if (v <= 0) return { char: ' ', intensity: 0 };
+    const ratio = v / max;
+    const idx = Math.min(SPARK.length - 1, Math.floor(ratio * (SPARK.length - 1)));
+    return { char: SPARK[idx], intensity: ratio };
+  });
 }

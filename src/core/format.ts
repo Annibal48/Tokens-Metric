@@ -41,6 +41,27 @@ export function estimateCostUSD(model: string, u: Usage): number | null {
   );
 }
 
+export type CostCategory = 'input' | 'output' | 'cacheWrite' | 'cacheRead';
+
+export function categoryCostUSD(
+  model: string,
+  category: CostCategory,
+  tokens: number,
+): number | null {
+  const key = priceKey(model);
+  if (!key) return null;
+  const p = PRICES_PER_MTOK[key];
+  const rate =
+    category === 'input'
+      ? p.in
+      : category === 'output'
+        ? p.out
+        : category === 'cacheWrite'
+          ? p.cacheWrite
+          : p.cacheRead;
+  return (tokens * rate) / 1_000_000;
+}
+
 export function fmtUSD(n: number): string {
   if (n < 0.01) return `$${n.toFixed(4)}`;
   if (n < 1) return `$${n.toFixed(3)}`;
