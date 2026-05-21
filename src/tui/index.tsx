@@ -6,7 +6,15 @@ import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
 import { estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
 import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js';
+import { anonymizePath, maskUserId } from '../core/privacy.js';
+import { HELP_TEXT, parseArgs } from '../core/args.js';
 import { bar, sparkline } from './bars.js';
+
+const OPTS = parseArgs(process.argv);
+if (OPTS.help) {
+  process.stdout.write(HELP_TEXT);
+  process.exit(0);
+}
 
 const RESCAN_MS = 3_000;
 const SPARK_WIDTH = 32;
@@ -142,7 +150,9 @@ function Header({ auth }: { auth: AuthInfo }) {
           {auth.installed ? 'Claude Code detected' : 'Claude Code NOT detected'}
           {'   '}
           <Text {...planChip.style}>{planChip.label}</Text>
-          {auth.userIdShort && <Text dimColor>{`   user ${auth.userIdShort}`}</Text>}
+          {auth.userIdShort && (
+            <Text dimColor>{`   user ${maskUserId(auth.userIdShort, OPTS.reveal)}`}</Text>
+          )}
         </Text>
       </Box>
       {auth.hint && (
@@ -210,7 +220,11 @@ function SessionPanel({
           />
           <KV
             k="cwd  "
-            v={<Text dimColor wrap="truncate-middle">{stats.cwd ?? '—'}</Text>}
+            v={
+              <Text dimColor wrap="truncate-middle">
+                {OPTS.reveal ? (stats.cwd ?? '—') : anonymizePath(stats.cwd)}
+              </Text>
+            }
           />
 
           <Box marginTop={1} flexDirection="column">
@@ -334,7 +348,7 @@ function TranscriptsPanel({
             <Text key={t.path}>
               <Text color={isActive ? 'green' : 'gray'}>{isActive ? '▶ ' : '  '}</Text>
               <Text dimColor={!isActive} wrap="truncate-middle">
-                {t.cwd}
+                {OPTS.reveal ? t.cwd : anonymizePath(t.cwd)}
               </Text>
               <Text dimColor>{`   ${timeAgo(now - t.mtimeMs)}`}</Text>
             </Text>

@@ -69,7 +69,7 @@ export function detectAuth(): AuthInfo {
       loggedIn: false,
       authMethod: 'none',
       planHint: 'unknown',
-      hint: 'Claude Code is installed but no userID was found in ~/.claude.json. Run `claude` to log in.',
+      hint: 'Claude Code is installed but you are not logged in. Run `claude` to log in.',
     };
   }
 
@@ -130,15 +130,15 @@ function inferPlanHint(cfg: ClaudeConfigSubset | null): PlanHint {
 function planHintExplanation(plan: PlanHint, cfg: ClaudeConfigSubset | null): string {
   switch (plan) {
     case 'team-or-enterprise':
-      return 'Org-managed seat detected (cachedExtraUsageDisabledReason=org_level_disabled). Likely Team or Enterprise.';
+      return 'Org-managed account — likely Team or Enterprise.';
     case 'paid':
-      return 'Paid plan likely (Opus-on-Pro migration flag is set). Pro/Max not distinguishable locally.';
+      return 'Paid plan likely — Pro or Max (not distinguishable locally).';
     case 'free':
       return cfg
-        ? 'Logged in, but no paid-plan migration flag found. Likely Free (or very recently upgraded).'
+        ? 'Logged in. No paid-plan signals found — likely Free.'
         : 'Logged in.';
     case 'api':
-      return 'API key billing.';
+      return 'Using API key — pay-per-token.';
     case 'unknown':
     default:
       return 'Plan tier not determinable from local signals.';

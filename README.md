@@ -35,6 +35,19 @@ tokens-metric
 
 Press `q` (or `Esc`, or `Ctrl-C`) to quit.
 
+### Privacy defaults
+
+Starting in v0.2.0, the TUI masks identifying information by default so screenshots can be shared safely:
+
+- `cwd` paths are shown as `~/…` instead of `/Users/<you>/…`.
+- The user ID is masked to `●●●●●●●●`.
+
+Pass `--reveal` to show everything unmasked on your own machine:
+
+```bash
+tokens-metric --reveal
+```
+
 ### Statusline inside Claude Code
 
 Add to `~/.claude/settings.json`:

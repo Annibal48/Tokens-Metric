@@ -3,6 +3,13 @@ import { aggregateTranscript, findActiveTranscript } from '../core/parser.js';
 import { detectAuth } from '../core/detect.js';
 import { estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
 import { totalTokens } from '../core/types.js';
+import { HELP_TEXT, parseArgs } from '../core/args.js';
+
+const OPTS = parseArgs(process.argv);
+if (OPTS.help) {
+  process.stdout.write(HELP_TEXT);
+  process.exit(0);
+}
 
 /**
  * One-shot status line. Reads whatever JSONL is currently the most recent
