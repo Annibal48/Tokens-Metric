@@ -22,9 +22,12 @@ jobs:
 
       - name: Set up Node
         uses: actions/setup-node@v4
+        # Intentionally NO registry-url: when it's set, setup-node writes an
+        # .npmrc with _authToken=<placeholder> that npm CLI tries to use
+        # before falling back to OIDC, which makes Trusted Publisher publish
+        # fail with 404. Without registry-url, npm 11+ uses OIDC cleanly.
         with:
           node-version: 20
-          registry-url: 'https://registry.npmjs.org'
           cache: npm
 
       # npm OIDC trusted publishing requires npm >= 11.5.1, which is newer
