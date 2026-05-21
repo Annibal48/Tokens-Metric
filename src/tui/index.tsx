@@ -19,6 +19,7 @@ import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js'
 import { anonymizePath } from '../core/privacy.js';
 import { createRequire } from 'node:module';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
+import { checkForUpdate } from '../core/updater.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json') as { version: string };
@@ -44,6 +45,7 @@ function App() {
   const [now, setNow] = useState<number>(Date.now());
   const [lastTailAt, setLastTailAt] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySnapshot | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const startedAtRef = useRef<number>(Date.now());
   const lastTotalRef = useRef(0);
 
@@ -57,6 +59,13 @@ function App() {
       if (input === 'q' || key.escape || (key.ctrl && input === 'c')) exit();
     });
   }
+
+  // Check for newer version on npm — non-blocking, result cached 24h.
+  useEffect(() => {
+    checkForUpdate(pkg.version)
+      .then((v) => { if (v) setUpdateAvailable(v); })
+      .catch(() => undefined);
+  }, []);
 
   // Historical aggregate over all transcripts. Refreshed on an interval —
   // the live session is already shown in SessionPanel, so minute-grain
@@ -152,6 +161,7 @@ function App() {
         lastTailAt={lastTailAt}
         startedAt={startedAtRef.current}
         now={now}
+        updateAvailable={updateAvailable}
       />
 
       <Box marginTop={1} flexDirection="row" gap={1}>
@@ -196,6 +206,7 @@ function Header({
   lastTailAt,
   startedAt,
   now,
+  updateAvailable,
 }: {
   auth: AuthInfo;
   sessionsToday: number;
@@ -203,6 +214,7 @@ function Header({
   lastTailAt: number | null;
   startedAt: number;
   now: number;
+  updateAvailable: string | null;
 }) {
   const ok = auth.installed && auth.loggedIn;
   const dot = ok ? 'green' : auth.installed ? 'yellow' : 'red';
@@ -232,6 +244,15 @@ function Header({
         <Text dimColor>{'   ·   uptime '}</Text>
         <Text>{timeAgo(now - startedAt)}</Text>
       </Box>
+      {updateAvailable && (
+        <Box>
+          <Text color="yellow">⚡ Update available: </Text>
+          <Text dimColor>v{pkg.version}</Text>
+          <Text color="yellow"> → </Text>
+          <Text color="yellow" bold>v{updateAvailable}</Text>
+          <Text dimColor>   npm install -g tokens-metric</Text>
+        </Box>
+      )}
     </Box>
   );
 }
