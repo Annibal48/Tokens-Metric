@@ -1,11 +1,9 @@
 name: Release
 
 # Publishes to npm with provenance whenever a vX.Y.Z tag is pushed.
-# Requires the NPM_TOKEN secret to be set in the repository:
-#   Settings → Secrets and variables → Actions → New repository secret
-#   Name: NPM_TOKEN
-#   Value: a granular access token with "Read and write" on tokens-metric and
-#   "bypass 2FA" enabled (npm requires this for automated publishing).
+# Authentication uses npm's Trusted Publisher (OIDC) — this repo is registered
+# on the npm package side, so no NPM_TOKEN is needed. The `id-token: write`
+# permission below is what lets GitHub issue the OIDC token npm verifies.
 
 on:
   push:
@@ -18,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # required for npm provenance
+      id-token: write   # required for npm provenance and OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
 
@@ -37,5 +35,3 @@ jobs:
 
       - name: Publish with provenance
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
