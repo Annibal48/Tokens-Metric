@@ -27,6 +27,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
+      # npm OIDC trusted publishing requires npm >= 11.5.1, which is newer
+      # than what ships with Node 20 by default. Upgrade explicitly.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install
         run: npm ci
 
