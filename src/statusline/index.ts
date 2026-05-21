@@ -50,9 +50,18 @@ function shortModel(m: string): string {
 function authBadge(a: ReturnType<typeof detectAuth>): string {
   if (!a.installed) return '⚠ no-cc';
   if (!a.loggedIn) return '🔒 logged-out';
-  if (a.authMethod === 'api-key') return '🔑 api';
-  if (a.authMethod === 'oauth-subscription') return '🧠 sub';
-  return '🧠';
+  switch (a.planHint) {
+    case 'api':
+      return '🔑 api';
+    case 'team-or-enterprise':
+      return '🏢 team';
+    case 'paid':
+      return '💎 paid';
+    case 'free':
+      return '🆓 free';
+    default:
+      return '🧠 sub';
+  }
 }
 
 main();

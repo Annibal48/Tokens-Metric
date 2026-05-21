@@ -167,16 +167,26 @@ function Row({ label, value }: { label: string; value: number }) {
 }
 
 function authLabel(a: AuthInfo): string {
-  switch (a.authMethod) {
-    case 'api-key':
-      return 'auth: API key (pay-per-token)';
-    case 'oauth-subscription':
-      return 'auth: subscription (Pro/Max/Team)';
-    case 'none':
-      return 'auth: none';
-    default:
-      return 'auth: unknown';
-  }
+  const method =
+    a.authMethod === 'api-key'
+      ? 'API key'
+      : a.authMethod === 'oauth-subscription'
+        ? 'subscription'
+        : a.authMethod === 'none'
+          ? 'none'
+          : 'unknown';
+  const plan =
+    a.planHint === 'team-or-enterprise'
+      ? 'Team/Enterprise'
+      : a.planHint === 'paid'
+        ? 'Pro or Max'
+        : a.planHint === 'free'
+          ? 'Free'
+          : a.planHint === 'api'
+            ? 'pay-per-token'
+            : '?';
+  const idSuffix = a.userIdShort ? ` · user ${a.userIdShort}` : '';
+  return `auth: ${method} · plan: ${plan}${idSuffix}`;
 }
 
 function timeAgo(ms: number): string {

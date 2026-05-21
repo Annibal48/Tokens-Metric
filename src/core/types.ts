@@ -21,12 +21,25 @@ export interface SessionStats {
   messageCount: number;
 }
 
+export type AuthMethod = 'oauth-subscription' | 'api-key' | 'none' | 'unknown';
+export type PlanHint =
+  | 'api'
+  | 'free'
+  | 'paid'
+  | 'team-or-enterprise'
+  | 'unknown';
+
 export interface AuthInfo {
   installed: boolean;
   binPath?: string;
   loggedIn: boolean;
-  authMethod: 'oauth-subscription' | 'api-key' | 'none' | 'unknown';
+  authMethod: AuthMethod;
+  /** Best-effort plan guess. NEVER authoritative — local signals only. */
+  planHint: PlanHint;
+  /** Human-readable explanation of why we picked planHint / authMethod. */
   hint?: string;
+  /** Anonymous user identifier when present (hashed by Claude Code, safe to surface). */
+  userIdShort?: string;
 }
 
 export const EMPTY_USAGE = (): Usage => ({
