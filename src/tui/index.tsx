@@ -46,7 +46,10 @@ function App() {
   const [lastTailAt, setLastTailAt] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySnapshot | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<1 | 2 | 3 | 4>(1);
+  // focusedTab: where the cursor sits (arrow navigation)
+  // openTab: which panel is expanded (null = all collapsed)
+  const [focusedTab, setFocusedTab] = useState<1 | 2 | 3 | 4>(1);
+  const [openTab, setOpenTab] = useState<1 | 2 | 3 | 4 | null>(null);
   const startedAtRef = useRef<number>(Date.now());
   const lastTotalRef = useRef(0);
 
@@ -57,11 +60,21 @@ function App() {
   if (interactive) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useInput((input, key) => {
-      if (input === 'q' || key.escape || (key.ctrl && input === 'c')) exit();
-      if (input === '1') setActiveTab(1);
-      if (input === '2') setActiveTab(2);
-      if (input === '3') setActiveTab(3);
-      if (input === '4') setActiveTab(4);
+      if (input === 'q' || (key.ctrl && input === 'c')) exit();
+      if (key.escape) { setOpenTab(null); return; }
+      // Arrow keys move the cursor
+      if (key.leftArrow)  { setFocusedTab((t) => (t > 1 ? (t - 1) as 1|2|3|4 : t)); return; }
+      if (key.rightArrow) { setFocusedTab((t) => (t < 4 ? (t + 1) as 1|2|3|4 : t)); return; }
+      // Enter opens/collapses the focused tab
+      if (key.return) {
+        setOpenTab((o) => (o === focusedTab ? null : focusedTab));
+        return;
+      }
+      // Number shortcuts: jump directly and open
+      if (input === '1') { setFocusedTab(1); setOpenTab(1); }
+      if (input === '2') { setFocusedTab(2); setOpenTab(2); }
+      if (input === '3') { setFocusedTab(3); setOpenTab(3); }
+      if (input === '4') { setFocusedTab(4); setOpenTab(4); }
     });
   }
 
@@ -174,28 +187,32 @@ function App() {
       </Box>
 
       <Box marginTop={1}>
-        <TabBar activeTab={activeTab} />
+        <TabBar focusedTab={focusedTab} openTab={openTab} />
       </Box>
 
-      <Box marginTop={1}>
-        {activeTab === 1 && (
-          <BreakdownPanel stats={stats} series={series} ratePerSec={ratePerSec} />
-        )}
-        {activeTab === 2 && <HistoryPanel history={history} />}
-        {activeTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} />}
-        {activeTab === 4 && (
-          <TranscriptsPanel
-            transcripts={transcripts}
-            activePath={transcriptPath}
-            now={now}
-          />
-        )}
-      </Box>
+      {openTab !== null && (
+        <Box marginTop={1}>
+          {openTab === 1 && (
+            <BreakdownPanel stats={stats} series={series} ratePerSec={ratePerSec} />
+          )}
+          {openTab === 2 && <HistoryPanel history={history} />}
+          {openTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} />}
+          {openTab === 4 && (
+            <TranscriptsPanel
+              transcripts={transcripts}
+              activePath={transcriptPath}
+              now={now}
+            />
+          )}
+        </Box>
+      )}
 
       <Box marginTop={1}>
         <Text dimColor>
           <Text color="magenta">q</Text> quit ·{' '}
-          <Text color="magenta">1–4</Text> navigate · pricing is{' '}
+          <Text color="magenta">←→</Text> move ·{' '}
+          <Text color="magenta">enter</Text> open/close ·{' '}
+          <Text color="magenta">1–4</Text> jump · pricing is{' '}
           <Text italic>API-equivalent</Text>, not your real bill on a subscription
         </Text>
       </Box>
@@ -357,7 +374,13 @@ function SessionStatusBar({
 }
 
 // ── Tab bar ──────────────────────────────────────────────────────────────────
-function TabBar({ activeTab }: { activeTab: 1 | 2 | 3 | 4 }) {
+function TabBar({
+  focusedTab,
+  openTab,
+}: {
+  focusedTab: 1 | 2 | 3 | 4;
+  openTab: 1 | 2 | 3 | 4 | null;
+}) {
   const tabs = [
     { id: 1 as const, label: 'Breakdown' },
     { id: 2 as const, label: 'History' },
@@ -367,17 +390,20 @@ function TabBar({ activeTab }: { activeTab: 1 | 2 | 3 | 4 }) {
 
   return (
     <Box paddingX={1}>
-      {tabs.map((tab) => (
-        <Box key={tab.id} marginRight={3}>
-          <Text
-            color={activeTab === tab.id ? 'cyan' : undefined}
-            bold={activeTab === tab.id}
-            dimColor={activeTab !== tab.id}
-          >
-            [{tab.id}] {tab.label}
-          </Text>
-        </Box>
-      ))}
+      {tabs.map((tab) => {
+        const isFocused = focusedTab === tab.id;
+        const isOpen = openTab === tab.id;
+        // open+focused → cyan bold; focused only → white bold (cursor); open only → cyan; rest → dim
+        const color = isOpen ? 'cyan' : isFocused ? 'white' : undefined;
+        const dim = !isFocused && !isOpen;
+        return (
+          <Box key={tab.id} marginRight={3}>
+            <Text color={color} bold={isFocused} dimColor={dim}>
+              {isFocused ? '›' : ' '}[{tab.id}] {tab.label}{isOpen ? ' ▾' : ''}
+            </Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
