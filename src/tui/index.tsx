@@ -46,6 +46,7 @@ function App() {
   const [lastTailAt, setLastTailAt] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySnapshot | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<1 | 2 | 3 | 4>(1);
   const startedAtRef = useRef<number>(Date.now());
   const lastTotalRef = useRef(0);
 
@@ -57,6 +58,10 @@ function App() {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useInput((input, key) => {
       if (input === 'q' || key.escape || (key.ctrl && input === 'c')) exit();
+      if (input === '1') setActiveTab(1);
+      if (input === '2') setActiveTab(2);
+      if (input === '3') setActiveTab(3);
+      if (input === '4') setActiveTab(4);
     });
   }
 
@@ -164,33 +169,33 @@ function App() {
         updateAvailable={updateAvailable}
       />
 
-      <Box marginTop={1} flexDirection="row" gap={1}>
-        <SessionPanel stats={stats} ratePerSec={ratePerSec} now={now} series={series} />
-        <BreakdownPanel stats={stats} />
+      <Box marginTop={1}>
+        <SessionStatusBar stats={stats} ratePerSec={ratePerSec} now={now} series={series} />
       </Box>
 
       <Box marginTop={1}>
-        <HistoryPanel history={history} />
+        <TabBar activeTab={activeTab} />
       </Box>
 
-      {todaySessions.length > 0 && (
-        <Box marginTop={1}>
-          <TodaySessionsPanel sessions={todaySessions} now={now} />
-        </Box>
-      )}
-
       <Box marginTop={1}>
-        <TranscriptsPanel
-          transcripts={transcripts}
-          activePath={transcriptPath}
-          now={now}
-        />
+        {activeTab === 1 && (
+          <BreakdownPanel stats={stats} series={series} ratePerSec={ratePerSec} />
+        )}
+        {activeTab === 2 && <HistoryPanel history={history} />}
+        {activeTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} />}
+        {activeTab === 4 && (
+          <TranscriptsPanel
+            transcripts={transcripts}
+            activePath={transcriptPath}
+            now={now}
+          />
+        )}
       </Box>
 
       <Box marginTop={1}>
         <Text dimColor>
           <Text color="magenta">q</Text> quit ·{' '}
-          <Text color="magenta">live</Text> tail of ~/.claude/projects · pricing is{' '}
+          <Text color="magenta">1–4</Text> navigate · pricing is{' '}
           <Text italic>API-equivalent</Text>, not your real bill on a subscription
         </Text>
       </Box>
@@ -218,8 +223,10 @@ function Header({
 }) {
   const ok = auth.installed && auth.loggedIn;
   const dot = ok ? 'green' : auth.installed ? 'yellow' : 'red';
-  const tailLabel = lastTailAt ? `updated ${timeAgo(now - lastTailAt)} ago` : 'waiting…';
-  const tailColor = !lastTailAt ? 'gray' : now - lastTailAt < 10_000 ? 'green' : 'yellow';
+  const tailAgo = lastTailAt ? `updated ${timeAgo(now - lastTailAt)} ago` : 'waiting…';
+  const tailIsLive = !!lastTailAt && now - lastTailAt < 10_000;
+  const tailColor = !lastTailAt ? 'gray' : tailIsLive ? 'green' : 'yellow';
+  const tailStatusText = !lastTailAt ? '' : tailIsLive ? '● live' : '⚠ stale';
 
   return (
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
@@ -240,7 +247,8 @@ function Header({
       </Box>
       <Box>
         <Text dimColor>watching ~/.claude/projects · </Text>
-        <Text color={tailColor}>{tailLabel}</Text>
+        {tailStatusText ? <Text color={tailColor}>{tailStatusText} </Text> : null}
+        <Text dimColor>{tailAgo}</Text>
         <Text dimColor>{'   ·   uptime '}</Text>
         <Text>{timeAgo(now - startedAt)}</Text>
       </Box>
@@ -274,8 +282,8 @@ function countToday(
   return { sessions, projects: projects.size };
 }
 
-// ── Session panel ────────────────────────────────────────────────────────────
-function SessionPanel({
+// ── Session status bar (always-visible compact one-liner) ────────────────────
+function SessionStatusBar({
   stats,
   ratePerSec,
   now,
@@ -285,6 +293,104 @@ function SessionPanel({
   ratePerSec: number;
   now: number;
   series: number[];
+}) {
+  if (!stats) {
+    return (
+      <Box borderStyle="round" borderColor="green" paddingX={1}>
+        <Text dimColor>○  No active session — waiting for Claude Code…</Text>
+      </Box>
+    );
+  }
+
+  const isIdle = !stats.lastEventAt || now - stats.lastEventAt > 60_000;
+  const cost = estimateCostUSD(stats.lastModel ?? '', stats.totals);
+  const tokens = totalTokens(stats.totals);
+  const hasActivity = series.some((n) => n > 0);
+  const MINI_SPARK = 16;
+
+  return (
+    <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="row" flexWrap="wrap">
+      <Text color="green" bold>●  </Text>
+      <Text bold color="cyan">{shortModel(stats.lastModel ?? '—')}</Text>
+      <Text dimColor>  ·  </Text>
+      <Text bold>{fmtNumber(tokens)}</Text>
+      <Text dimColor> tok</Text>
+      {cost !== null && (
+        <>
+          <Text dimColor>  ·  ~</Text>
+          <Text>{fmtUSD(cost)}</Text>
+        </>
+      )}
+      <Text dimColor>  ·  </Text>
+      <Text>{stats.messageCount}</Text>
+      <Text dimColor> msgs</Text>
+      {stats.startedAt !== undefined && stats.startedAt !== null && (
+        <>
+          <Text dimColor>  ·  since </Text>
+          <Text>{fmtTime(stats.startedAt)}</Text>
+        </>
+      )}
+      {hasActivity && (
+        <>
+          <Text>{'   '}</Text>
+          {sparklineCells(series, MINI_SPARK).map((cell, i) => {
+            const isCurrentSlot = i === MINI_SPARK - 1 && cell.intensity > 0;
+            return (
+              <Text
+                key={i}
+                color={isCurrentSlot ? 'white' : intensityColor(cell.intensity)}
+                bold={isCurrentSlot}
+              >
+                {cell.char}
+              </Text>
+            );
+          })}
+        </>
+      )}
+      <Text>{'   '}</Text>
+      <Text color={isIdle ? 'gray' : 'green'}>{isIdle ? '○ idle' : '● live'}</Text>
+      {stats.lastEventAt && (
+        <Text dimColor>{`  ${timeAgo(now - stats.lastEventAt)} ago`}</Text>
+      )}
+    </Box>
+  );
+}
+
+// ── Tab bar ──────────────────────────────────────────────────────────────────
+function TabBar({ activeTab }: { activeTab: 1 | 2 | 3 | 4 }) {
+  const tabs = [
+    { id: 1 as const, label: 'Breakdown' },
+    { id: 2 as const, label: 'History' },
+    { id: 3 as const, label: 'Sessions' },
+    { id: 4 as const, label: 'Transcripts' },
+  ];
+
+  return (
+    <Box paddingX={1}>
+      {tabs.map((tab) => (
+        <Box key={tab.id} marginRight={3}>
+          <Text
+            color={activeTab === tab.id ? 'cyan' : undefined}
+            bold={activeTab === tab.id}
+            dimColor={activeTab !== tab.id}
+          >
+            [{tab.id}] {tab.label}
+          </Text>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+// ── Breakdown panel ──────────────────────────────────────────────────────────
+function BreakdownPanel({
+  stats,
+  series,
+  ratePerSec,
+}: {
+  stats: SessionStats | null;
+  series: number[];
+  ratePerSec: number;
 }) {
   return (
     <Box
@@ -296,101 +402,49 @@ function SessionPanel({
       minWidth={42}
     >
       <Text bold color="green">
-        {'Active session'}
-        {stats?.startedAt ? (
-          <Text color="green" bold={false}>{` · since ${fmtTime(stats.startedAt)}`}</Text>
-        ) : null}
+        {'Token breakdown'}
+        <Text bold={false} color="green"> · live data</Text>
       </Text>
-      {!stats ? (
-        <Text dimColor>Waiting for a Claude Code session…</Text>
-      ) : (
-        <>
-          <KV k="Model" v={<Text color="cyan">{stats.lastModel ?? '—'}</Text>} />
-          <KV k="Msgs " v={<Text>{stats.messageCount}</Text>} />
-          <KV
-            k="Last "
-            v={
-              stats.lastEventAt ? (
-                <Text>{timeAgo(now - stats.lastEventAt)} ago</Text>
-              ) : (
-                <Text dimColor>—</Text>
-              )
-            }
-          />
-          <KV
-            k="cwd  "
-            v={
-              <Text dimColor wrap="truncate-middle">
-                {OPTS.reveal ? (stats.cwd ?? '—') : anonymizePath(stats.cwd)}
-              </Text>
-            }
-          />
 
-          <Box marginTop={1} flexDirection="column">
-            <Text>
-              <Text bold>Σ </Text>
-              <Text color="cyan" bold>
-                {fmtNumber(totalTokens(stats.totals))}
-              </Text>
-              <Text dimColor> tokens</Text>
-            </Text>
-            {(() => {
-              const cost = estimateCostUSD(stats.lastModel ?? '', stats.totals);
-              return cost !== null ? (
-                <Text dimColor>~{fmtUSD(cost)} API-equivalent</Text>
-              ) : null;
-            })()}
+      {/* Sparkline */}
+      {series.some((n) => n > 0) ? (
+        <Box marginBottom={1} flexDirection="column">
+          <Text>
+            <Text dimColor>activity (last {SPARK_WIDTH}s)   peak </Text>
+            <Text bold color="yellow">{fmtNumber(Math.max(...series))}</Text>
+            <Text dimColor>/s</Text>
             {Math.round(ratePerSec) > 0 && (
-              <Text>
-                <Text bold>~ </Text>
+              <>
+                <Text dimColor>   avg </Text>
                 <Text color="yellow">{fmtNumber(Math.round(ratePerSec))}</Text>
-                <Text dimColor> tok/s (avg last {SPARK_WIDTH}s)</Text>
-              </Text>
-            )}
-          </Box>
-
-          {series.some((n) => n > 0) ? (
-            <Box marginTop={1} flexDirection="column">
-              <Text>
-                <Text dimColor>activity (last {SPARK_WIDTH}s)</Text>
-                <Text dimColor>   peak </Text>
-                <Text bold color="yellow">{fmtNumber(Math.max(...series))}</Text>
                 <Text dimColor>/s</Text>
-              </Text>
-              <Text>
-                {sparklineCells(series, SPARK_WIDTH).map((cell, i) => (
-                  <Text key={i} color={intensityColor(cell.intensity)}>
-                    {cell.char}
-                  </Text>
-                ))}
-              </Text>
-              <Text dimColor>{axisLabel(SPARK_WIDTH)}</Text>
-            </Box>
-          ) : (
-            <Box marginTop={1}>
-              <Text dimColor>idle — no activity in the last {SPARK_WIDTH}s</Text>
-            </Box>
-          )}
-        </>
+              </>
+            )}
+          </Text>
+          <Text>
+            {sparklineCells(series, SPARK_WIDTH).map((cell, i) => {
+              const isCurrentSlot = i === SPARK_WIDTH - 1 && cell.intensity > 0;
+              return (
+                <Text
+                  key={i}
+                  color={isCurrentSlot ? 'white' : intensityColor(cell.intensity)}
+                  bold={isCurrentSlot}
+                >
+                  {cell.char}
+                </Text>
+              );
+            })}
+          </Text>
+          <Text dimColor>{axisLabel(SPARK_WIDTH)}</Text>
+        </Box>
+      ) : (
+        <Box marginBottom={1}>
+          <Text dimColor>○ idle — no activity in the last {SPARK_WIDTH}s</Text>
+        </Box>
       )}
-    </Box>
-  );
-}
 
-// ── Breakdown panel ──────────────────────────────────────────────────────────
-function BreakdownPanel({ stats }: { stats: SessionStats | null }) {
-  return (
-    <Box
-      borderStyle="round"
-      borderColor="blue"
-      paddingX={1}
-      flexDirection="column"
-      flexGrow={1}
-      minWidth={42}
-    >
-      <Text bold color="blue">Token breakdown</Text>
       {!stats ? (
-        <Text dimColor>No data yet.</Text>
+        <Text dimColor>No session data yet.</Text>
       ) : (
         (() => {
           const u = stats.totals;
@@ -447,7 +501,9 @@ function BreakdownPanel({ stats }: { stats: SessionStats | null }) {
                     <Text color={hitRatio > 0.9 ? 'green' : hitRatio > 0.6 ? 'yellow' : 'red'}>
                       {(hitRatio * 100).toFixed(1)}%
                     </Text>
-                    <Text dimColor>  (cache read / (input + cache read))</Text>
+                    <Text color={hitRatio > 0.9 ? 'green' : hitRatio > 0.6 ? 'yellow' : 'red'}>
+                      {hitRatio > 0.9 ? '  ✓ excellent' : hitRatio > 0.6 ? '  ⚠ degraded' : '  ✗ poor'}
+                    </Text>
                   </Text>
                 </Box>
               )}
@@ -510,8 +566,11 @@ function BarRow({
 // ── History panel ────────────────────────────────────────────────────────────
 function HistoryPanel({ history }: { history: HistorySnapshot | null }) {
   return (
-    <Box borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column" width="100%">
-      <Text bold color="magenta">Usage history</Text>
+    <Box borderStyle="round" borderColor="blue" paddingX={1} flexDirection="column" width="100%">
+      <Text bold color="blue">
+        {'Usage history'}
+        <Text bold={false} color="blue"> · refreshes every 60s</Text>
+      </Text>
       {!history ? (
         <Text dimColor>Scanning ~/.claude/projects…</Text>
       ) : history.scannedFiles === 0 ? (
@@ -607,8 +666,11 @@ function fmtTopModel(b: BucketStats): string {
 // ── Today's sessions panel ───────────────────────────────────────────────────
 function TodaySessionsPanel({ sessions, now }: { sessions: SessionSummary[]; now: number }) {
   return (
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" width="100%">
-      <Text bold color="cyan">Today&apos;s sessions</Text>
+    <Box borderStyle="round" borderColor="blue" paddingX={1} flexDirection="column" width="100%">
+      <Text bold color="blue">
+        {"Today's sessions"}
+        <Text bold={false} color="blue">{` · ${sessions.length} ${plural(sessions.length, 'session', 'sessions')} today`}</Text>
+      </Text>
       {sessions.map((s) => {
         const tokens = Object.values(s.byModel).reduce(
           (acc, u) => acc + totalTokens(u),
@@ -710,9 +772,18 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 
 function fmtTime(ms: number): string {
   const d = new Date(ms);
+  const now = new Date();
+  const isToday =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
   const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
+  const time = `${h}:${m}`;
+  if (isToday) return time;
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day} ${time}`;
 }
 
 function plural(n: number, one: string, many: string): string {
