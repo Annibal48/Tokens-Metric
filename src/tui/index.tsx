@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import React, { useEffect, useRef, useState } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
+import { createInterface } from 'node:readline';
+import { spawnSync } from 'node:child_process';
 import { findActiveTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
@@ -856,4 +858,38 @@ function timeAgo(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+// ── Pre-start update prompt ───────────────────────────────────────────────────
+async function promptForUpdate(): Promise<void> {
+  const latest = await checkForUpdate(pkg.version);
+  if (!latest || !process.stdin.isTTY) return;
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  const answer = await new Promise<string>((resolve) => {
+    rl.question(
+      `\n⚡  tokens-metric v${latest} available  (you have v${pkg.version})\n` +
+      `    Install now? [Y/n] `,
+      (ans) => { rl.close(); resolve(ans); },
+    );
+  });
+
+  process.stdout.write('\n');
+
+  if (answer.trim().toLowerCase() !== 'n') {
+    process.stdout.write('Installing tokens-metric@latest…\n');
+    const result = spawnSync('npm', ['install', '-g', 'tokens-metric'], {
+      stdio: 'inherit',
+      shell: true,
+    });
+    if (result.status === 0) {
+      process.stdout.write(`\n✓ Updated to v${latest} — restarting…\n\n`);
+      spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', shell: false });
+      process.exit(0);
+    } else {
+      process.stdout.write('\n✗ Install failed — starting current version anyway.\n\n');
+    }
+  }
+}
+
+await promptForUpdate();
 render(<App />);
