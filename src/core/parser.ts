@@ -83,6 +83,7 @@ export async function aggregateTranscript(path: string): Promise<SessionStats> {
     totals: EMPTY_USAGE(),
     byModel: {},
     messageCount: 0,
+    lastMsgUsage: null,
   };
 
   const stream = createReadStream(path, { encoding: 'utf8' });
@@ -137,6 +138,8 @@ export function applyLine(stats: SessionStats, line: string): void {
   stats.totals = addUsage(stats.totals, u);
   stats.byModel[model] = addUsage(stats.byModel[model] ?? EMPTY_USAGE(), u);
   stats.messageCount += 1;
+  // Overwrite — we only care about the most recent turn's context footprint.
+  stats.lastMsgUsage = { ...EMPTY_USAGE(), ...u };
 }
 
 function numberOr0(v: unknown): number {

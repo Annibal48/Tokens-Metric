@@ -21,6 +21,7 @@ export async function tailTranscript(path: string): Promise<TailHandle> {
     totals: EMPTY_USAGE(),
     byModel: {},
     messageCount: 0,
+    lastMsgUsage: null,
   };
 
   const listeners: ((s: SessionStats) => void)[] = [];

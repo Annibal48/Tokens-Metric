@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { findActiveTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
-import { categoryCostUSD, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
+import { categoryCostUSD, contextWindowSize, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
 import {
   buildHistory,
   bucketCostUSD,
@@ -487,8 +487,37 @@ function BreakdownPanel({
           const model = stats.lastModel ?? '';
           const cacheDenom = u.input_tokens + u.cache_read_input_tokens;
           const hitRatio = cacheDenom > 0 ? u.cache_read_input_tokens / cacheDenom : null;
+
+          // Context window fill — based on last message's input footprint
+          const ctxLimit = contextWindowSize(model);
+          const lastMsg = stats.lastMsgUsage;
+          const ctxUsed = lastMsg
+            ? lastMsg.input_tokens + lastMsg.cache_read_input_tokens + lastMsg.cache_creation_input_tokens
+            : null;
+          const ctxRatio = ctxUsed !== null ? ctxUsed / ctxLimit : null;
+
           return (
             <Box flexDirection="column">
+              {ctxRatio !== null && (
+                <Box marginBottom={1} flexDirection="column">
+                  <Text>
+                    <Text bold>Context  </Text>
+                    <Text color={ctxRatio > 0.9 ? 'red' : ctxRatio > 0.7 ? 'yellow' : 'green'}>
+                      {ctxWindowBar(ctxRatio, BAR_WIDTH)}
+                    </Text>
+                    <Text>{'  '}</Text>
+                    <Text bold color={ctxRatio > 0.9 ? 'red' : ctxRatio > 0.7 ? 'yellow' : 'green'}>
+                      {fmtNumber(ctxUsed!)}
+                    </Text>
+                    <Text dimColor> / {fmtNumber(ctxLimit)}  </Text>
+                    <Text color={ctxRatio > 0.9 ? 'red' : ctxRatio > 0.7 ? 'yellow' : 'green'}>
+                      {(ctxRatio * 100).toFixed(1)}%
+                    </Text>
+                    {ctxRatio > 0.9 && <Text color="red">  ⚠ near limit</Text>}
+                  </Text>
+                  <Text dimColor>  last turn · {fmtNumber(ctxLimit - ctxUsed!)} tokens remaining</Text>
+                </Box>
+              )}
               <BarRow
                 label="Input    "
                 value={u.input_tokens}
@@ -827,6 +856,11 @@ function displayCwd(cwd: string | undefined): string {
   const out = anonymizePath(cwd);
   if (out === '~') return '~ (home)';
   return out;
+}
+
+function ctxWindowBar(ratio: number, width: number): string {
+  const filled = Math.round(Math.min(1, ratio) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
 function intensityColor(ratio: number): string {

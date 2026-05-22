@@ -19,6 +19,8 @@ export interface SessionStats {
   totals: Usage;
   byModel: Record<string, Usage>;
   messageCount: number;
+  /** Usage of the most recent assistant message — used to compute context window fill. */
+  lastMsgUsage: Usage | null;
 }
 
 export type AuthMethod = 'oauth-subscription' | 'api-key' | 'none' | 'unknown';

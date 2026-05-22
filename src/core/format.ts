@@ -62,6 +62,15 @@ export function categoryCostUSD(
   return (tokens * rate) / 1_000_000;
 }
 
+/**
+ * Returns the context window size in tokens for a given model.
+ * All current Claude models share a 200k window. Falls back to 200k for
+ * unknown models so the bar is always renderable.
+ */
+export function contextWindowSize(_model: string): number {
+  return 200_000;
+}
+
 export function fmtUSD(n: number): string {
   if (n < 0.01) return `$${n.toFixed(4)}`;
   if (n < 1) return `$${n.toFixed(3)}`;
