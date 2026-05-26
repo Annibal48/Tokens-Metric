@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
-import { findMostRecentActiveTranscript, listTranscripts } from '../core/parser.js';
+import { findActiveTranscript, findActiveCodexTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
 import { categoryCostUSD, contextWindowSize, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
@@ -41,11 +41,20 @@ const BAR_WIDTH = 20;
 function App() {
   const { exit } = useApp();
   const [auth] = useState<AuthInfo>(() => detectAuth());
-  const [stats, setStats] = useState<SessionStats | null>(null);
-  const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
-  const [series, setSeries] = useState<number[]>(() => Array(SPARK_WIDTH).fill(0));
+  // Claude source
+  const [claudeStats, setClaudeStats] = useState<SessionStats | null>(null);
+  const [claudePath, setClaudePath] = useState<string | null>(null);
+  const [claudeSeries, setClaudeSeries] = useState<number[]>(() => Array(SPARK_WIDTH).fill(0));
+  const [claudeLastTailAt, setClaudeLastTailAt] = useState<number | null>(null);
+  const claudeLastTotalRef = useRef(0);
+  // Codex source
+  const [codexStats, setCodexStats] = useState<SessionStats | null>(null);
+  const [codexPath, setCodexPath] = useState<string | null>(null);
+  const [codexSeries, setCodexSeries] = useState<number[]>(() => Array(SPARK_WIDTH).fill(0));
+  const [codexLastTailAt, setCodexLastTailAt] = useState<number | null>(null);
+  const codexLastTotalRef = useRef(0);
+
   const [now, setNow] = useState<number>(Date.now());
-  const [lastTailAt, setLastTailAt] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySnapshot | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   // focusedTab: where the cursor sits (arrow navigation)
@@ -53,7 +62,6 @@ function App() {
   const [focusedTab, setFocusedTab] = useState<1 | 2 | 3 | 4>(1);
   const [openTab, setOpenTab] = useState<1 | 2 | 3 | 4 | null>(null);
   const startedAtRef = useRef<number>(Date.now());
-  const lastTotalRef = useRef(0);
 
   // useInput requires raw mode (interactive TTY). Skip it when stdin is piped
   // or otherwise non-interactive, so `node dist/tui/index.js | cat` still
@@ -112,48 +120,88 @@ function App() {
   useEffect(() => {
     const t = setInterval(() => {
       setNow(Date.now());
-      setSeries((s) => [...s.slice(1), 0]);
+      setClaudeSeries((s) => [...s.slice(1), 0]);
+      setCodexSeries((s) => [...s.slice(1), 0]);
     }, 1000);
     return () => clearInterval(t);
   }, []);
 
+  // Claude tailing
   useEffect(() => {
     let handle: TailHandle | null = null;
     let cancelled = false;
 
     async function attach(path: string) {
       handle?.stop().catch(() => undefined);
-      setTranscriptPath(path);
+      setClaudePath(path);
       handle = await tailTranscript(path);
-      if (cancelled) {
-        handle.stop();
-        return;
-      }
-      // Seed initial state — tailTranscript already drained the file once
-      // before returning, but its first notify() fires before any listener
-      // is attached, so we'd otherwise wait for the next appended line.
-      lastTotalRef.current = totalTokens(handle.stats.totals);
-      setLastTailAt(Date.now());
-      setStats({ ...handle.stats });
+      if (cancelled) { handle.stop(); return; }
+      claudeLastTotalRef.current = totalTokens(handle.stats.totals);
+      setClaudeLastTailAt(Date.now());
+      setClaudeStats({ ...handle.stats });
       handle.onUpdate((s) => {
-        setLastTailAt(Date.now());
+        setClaudeLastTailAt(Date.now());
         const tot = totalTokens(s.totals);
-        const delta = Math.max(0, tot - lastTotalRef.current);
+        const delta = Math.max(0, tot - claudeLastTotalRef.current);
         if (delta > 0) {
-          setSeries((arr) => {
+          setClaudeSeries((arr) => {
             const next = arr.slice();
             next[next.length - 1] = (next[next.length - 1] ?? 0) + delta;
             return next;
           });
         }
-        lastTotalRef.current = tot;
-        setStats({ ...s });
+        claudeLastTotalRef.current = tot;
+        setClaudeStats({ ...s });
       });
     }
 
     async function rescan() {
-      const active = findMostRecentActiveTranscript();
-      if (active && active.path !== transcriptPath) await attach(active.path);
+      const active = findActiveTranscript();
+      if (active && active.path !== claudePath) await attach(active.path);
+    }
+
+    rescan();
+    const interval = setInterval(rescan, RESCAN_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      handle?.stop().catch(() => undefined);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Codex tailing
+  useEffect(() => {
+    let handle: TailHandle | null = null;
+    let cancelled = false;
+
+    async function attach(path: string) {
+      handle?.stop().catch(() => undefined);
+      setCodexPath(path);
+      handle = await tailTranscript(path);
+      if (cancelled) { handle.stop(); return; }
+      codexLastTotalRef.current = totalTokens(handle.stats.totals);
+      setCodexLastTailAt(Date.now());
+      setCodexStats({ ...handle.stats });
+      handle.onUpdate((s) => {
+        setCodexLastTailAt(Date.now());
+        const tot = totalTokens(s.totals);
+        const delta = Math.max(0, tot - codexLastTotalRef.current);
+        if (delta > 0) {
+          setCodexSeries((arr) => {
+            const next = arr.slice();
+            next[next.length - 1] = (next[next.length - 1] ?? 0) + delta;
+            return next;
+          });
+        }
+        codexLastTotalRef.current = tot;
+        setCodexStats({ ...s });
+      });
+    }
+
+    async function rescan() {
+      const active = findActiveCodexTranscript();
+      if (active && active.path !== codexPath) await attach(active.path);
     }
 
     rescan();
@@ -169,8 +217,19 @@ function App() {
   const allTranscripts = listTranscripts();
   const transcripts = allTranscripts.slice(0, 5);
   const today = countToday(allTranscripts, now);
-  const ratePerSec = series.reduce((a, b) => a + b, 0) / SPARK_WIDTH;
-  const todaySessions = getTodaySessions(now, transcriptPath);
+  const claudeRate = claudeSeries.reduce((a, b) => a + b, 0) / SPARK_WIDTH;
+  const codexRate = codexSeries.reduce((a, b) => a + b, 0) / SPARK_WIDTH;
+  const todaySessions = getTodaySessions(now, claudePath);
+
+  // BreakdownPanel follows the most recently active source
+  const claudeAt = claudeStats?.lastEventAt ?? 0;
+  const codexAt = codexStats?.lastEventAt ?? 0;
+  const primaryStats = codexAt > claudeAt ? codexStats : claudeStats;
+  const primarySeries = codexAt > claudeAt ? codexSeries : claudeSeries;
+  const primaryRate = codexAt > claudeAt ? codexRate : claudeRate;
+  const lastTailAt = claudeLastTailAt && codexLastTailAt
+    ? Math.max(claudeLastTailAt, codexLastTailAt)
+    : claudeLastTailAt ?? codexLastTailAt;
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -184,8 +243,16 @@ function App() {
         updateAvailable={updateAvailable}
       />
 
-      <Box marginTop={1}>
-        <SessionStatusBar stats={stats} ratePerSec={ratePerSec} now={now} series={series} />
+      <Box marginTop={1} flexDirection="column">
+        {claudeStats
+          ? <SessionStatusBar stats={claudeStats} ratePerSec={claudeRate} now={now} series={claudeSeries} />
+          : !codexStats && <SessionStatusBar stats={null} ratePerSec={0} now={now} series={claudeSeries} />
+        }
+        {codexStats && (
+          <Box marginTop={claudeStats ? 1 : 0}>
+            <SessionStatusBar stats={codexStats} ratePerSec={codexRate} now={now} series={codexSeries} />
+          </Box>
+        )}
       </Box>
 
       <Box marginTop={1}>
@@ -195,14 +262,14 @@ function App() {
       {openTab !== null && (
         <Box marginTop={1}>
           {openTab === 1 && (
-            <BreakdownPanel stats={stats} series={series} ratePerSec={ratePerSec} />
+            <BreakdownPanel stats={primaryStats} series={primarySeries} ratePerSec={primaryRate} />
           )}
           {openTab === 2 && <HistoryPanel history={history} />}
           {openTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} />}
           {openTab === 4 && (
             <TranscriptsPanel
               transcripts={transcripts}
-              activePath={transcriptPath}
+              activePath={claudePath}
               now={now}
             />
           )}
