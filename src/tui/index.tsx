@@ -712,7 +712,7 @@ function HistoryPanel({ history }: { history: HistorySnapshot | null }) {
           <Box marginTop={1}>
             <DualBarChart days={history.last7Days} now={history.generatedAt} />
           </Box>
-          <Box marginTop={1}>
+          <Box marginTop={1} flexDirection="column">
             <HistoryRow label="" today="Today" d7="7d" d30="30d" dim />
             <HistoryRow
               label="Tokens "
@@ -776,10 +776,16 @@ function DualBarChart({ days, now }: { days: DayStats[]; now: number }) {
 
   const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const todayStart = (() => { const d = new Date(now); d.setHours(0,0,0,0); return d.getTime(); })();
+  const fmtDay = (ms: number): string => {
+    const d = new Date(ms);
+    return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+  };
 
   return (
     <Box flexDirection="column">
-      <Text bold dimColor>{'last 7 days'}</Text>
+      <Text dimColor>
+        last 7 days   ·   <Text color="cyan">█</Text> claude   <Text color="magenta">█</Text> codex
+      </Text>
       {days.map((day) => {
         const ct = claudeTokens(day.byModel);
         const cxt = codexTokens(day.byModel);
@@ -788,29 +794,39 @@ function DualBarChart({ days, now }: { days: DayStats[]; now: number }) {
           .filter(([m]) => m === 'codex')
           .reduce((s, [m, u]) => s + (estimateCostUSD(m, u) ?? 0), 0);
         const isToday = day.dayStart === todayStart;
-        const label = isToday ? 'today' : DAY_LABELS[new Date(day.dayStart).getDay()];
+        const dayName = isToday ? 'today' : DAY_LABELS[new Date(day.dayStart).getDay()];
+        const label = `${dayName.padEnd(5)} ${fmtDay(day.dayStart)}`;
         const hasData = ct > 0 || cxt > 0;
 
-        return (
-          <Box key={day.dayStart} flexDirection="column" marginTop={1}>
-            <Text bold={isToday} color={isToday ? 'white' : undefined}>
-              {label.padEnd(6)}
-              {!hasData && <Text dimColor>  no data</Text>}
+        if (!hasData) {
+          return (
+            <Text key={day.dayStart} dimColor>
+              {label}  ─
             </Text>
+          );
+        }
+
+        const labelPad = ' '.repeat(label.length + 2);
+        return (
+          <Box key={day.dayStart} flexDirection="column">
             {ct > 0 && (
               <Text>
-                <Text dimColor>{'  claude  '}</Text>
+                <Text bold={isToday} color={isToday ? 'white' : undefined}>{label}  </Text>
+                <Text dimColor>claude </Text>
                 <Text color="cyan">{solidBar(ct / maxTokens, CHART_BAR_WIDTH)}</Text>
-                <Text>{'  '}</Text>
+                <Text>  </Text>
                 <Text bold>{fmtNumber(ct).padStart(7)}</Text>
                 {cc > 0 && <Text dimColor>{`  ~${fmtUSD(cc)}`}</Text>}
               </Text>
             )}
             {cxt > 0 && (
               <Text>
-                <Text dimColor>{'  codex   '}</Text>
+                {ct > 0
+                  ? <Text>{labelPad}</Text>
+                  : <Text bold={isToday} color={isToday ? 'white' : undefined}>{label}  </Text>}
+                <Text dimColor>codex  </Text>
                 <Text color="magenta">{solidBar(cxt / maxTokens, CHART_BAR_WIDTH)}</Text>
-                <Text>{'  '}</Text>
+                <Text>  </Text>
                 <Text bold>{fmtNumber(cxt).padStart(7)}</Text>
                 {cxc > 0 && <Text dimColor>{`  ~${fmtUSD(cxc)}`}</Text>}
               </Text>
