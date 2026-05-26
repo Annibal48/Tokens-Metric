@@ -18,13 +18,30 @@ const PRICES_PER_MTOK: Record<string, { in: number; out: number; cacheWrite: num
   'claude-opus-4': { in: 15, out: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   // Haiku 4.x family
   'claude-haiku-4': { in: 0.8, out: 4, cacheWrite: 1, cacheRead: 0.08 },
+  // OpenAI o4-mini — default Codex CLI model; also used for "codex" key
+  'openai-o4-mini': { in: 1.1, out: 4.4, cacheWrite: 0, cacheRead: 0.275 },
+  // OpenAI o3
+  'openai-o3': { in: 10, out: 40, cacheWrite: 0, cacheRead: 2.5 },
+  // OpenAI o3-mini
+  'openai-o3-mini': { in: 1.1, out: 4.4, cacheWrite: 0, cacheRead: 0.275 },
+  // OpenAI GPT-4o
+  'openai-gpt-4o': { in: 2.5, out: 10, cacheWrite: 0, cacheRead: 1.25 },
+  // OpenAI GPT-4o mini
+  'openai-gpt-4o-mini': { in: 0.15, out: 0.6, cacheWrite: 0, cacheRead: 0.075 },
 };
 
 function priceKey(model: string): keyof typeof PRICES_PER_MTOK | null {
   const m = model.toLowerCase();
+  // Claude
   if (m.includes('opus')) return 'claude-opus-4';
   if (m.includes('haiku')) return 'claude-haiku-4';
   if (m.includes('sonnet')) return 'claude-sonnet-4';
+  // OpenAI / Codex — "codex" key maps to o4-mini (Codex CLI default)
+  if (m === 'codex' || m.includes('o4-mini')) return 'openai-o4-mini';
+  if (m.includes('o3-mini')) return 'openai-o3-mini';
+  if (m === 'o3' || m.endsWith('-o3')) return 'openai-o3';
+  if (m.includes('gpt-4o-mini')) return 'openai-gpt-4o-mini';
+  if (m.includes('gpt-4o')) return 'openai-gpt-4o';
   return null;
 }
 

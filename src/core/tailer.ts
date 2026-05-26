@@ -1,6 +1,6 @@
 import { open, watch, type FileHandle } from 'node:fs/promises';
 import { statSync } from 'node:fs';
-import { applyLine } from './parser.js';
+import { applyLine, applyCodexLine } from './parser.js';
 import { EMPTY_USAGE, type SessionStats } from './types.js';
 import { deriveSessionId } from './parser.js';
 
@@ -14,7 +14,9 @@ export interface TailHandle {
  * Open a JSONL transcript, read everything currently in it, then watch for
  * appended lines. Calls onUpdate whenever the stats change.
  */
-export async function tailTranscript(path: string): Promise<TailHandle> {
+export async function tailTranscript(path: string, format?: 'claude' | 'codex'): Promise<TailHandle> {
+  const isCodex = format === 'codex' || path.includes('/.codex/sessions/');
+  const lineApplier = isCodex ? applyCodexLine : applyLine;
   const stats: SessionStats = {
     sessionId: deriveSessionId(path),
     transcriptPath: path,
@@ -53,7 +55,7 @@ export async function tailTranscript(path: string): Promise<TailHandle> {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       if (line.trim()) {
-        applyLine(stats, line);
+        lineApplier(stats, line);
         changed = true;
       }
     }

@@ -1,7 +1,7 @@
 import { readdirSync, statSync, createReadStream, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { claudeHome } from './detect.js';
+import { claudeHome, codexSessionsDir } from './detect.js';
 import { addUsage, EMPTY_USAGE, totalTokens, type Usage } from './types.js';
 import { estimateCostUSD } from './format.js';
 import {
@@ -49,17 +49,21 @@ let storedDays: Map<number, DayAggregate> | null = null;
 export async function buildHistory(now = Date.now()): Promise<HistorySnapshot> {
   if (storedDays === null) storedDays = loadStore();
 
-  const root = join(claudeHome(), 'projects');
-  if (!existsSync(root)) {
-    // No transcripts available; surface whatever the store has.
-    return aggregate(now);
-  }
+  const claudeRoot = join(claudeHome(), 'projects');
+  const codexRoot = codexSessionsDir();
+  const allFiles: { path: string; mtimeMs: number }[] = [];
 
-  const files = listAllJsonl(root);
-  for (const f of files) {
+  if (existsSync(claudeRoot)) allFiles.push(...listAllJsonl(claudeRoot));
+  if (existsSync(codexRoot)) allFiles.push(...listCodexJsonl(codexRoot));
+
+  if (allFiles.length === 0) return aggregate(now);
+
+  for (const f of allFiles) {
     const cached = cache.get(f.path);
     if (!cached || cached.mtimeMs < f.mtimeMs) {
-      const parsed = await parseFile(f.path);
+      const parsed = f.path.includes('/.codex/sessions/')
+        ? await parseCodexFile(f.path)
+        : await parseFile(f.path);
       cache.set(f.path, {
         mtimeMs: f.mtimeMs,
         byDay: parsed.byDay,
@@ -71,7 +75,7 @@ export async function buildHistory(now = Date.now()): Promise<HistorySnapshot> {
     }
   }
 
-  const known = new Set(files.map((f) => f.path));
+  const known = new Set(allFiles.map((f) => f.path));
   for (const key of Array.from(cache.keys())) {
     if (!known.has(key)) cache.delete(key);
   }
@@ -293,6 +297,80 @@ async function parseFile(path: string): Promise<ParsedFile> {
 
 function numberOr0(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+function listCodexJsonl(root: string): { path: string; mtimeMs: number }[] {
+  const out: { path: string; mtimeMs: number }[] = [];
+  for (const year of safeReaddir(root)) {
+    for (const month of safeReaddir(join(root, year))) {
+      for (const day of safeReaddir(join(root, year, month))) {
+        const dayDir = join(root, year, month, day);
+        for (const f of safeReaddir(dayDir)) {
+          if (!f.endsWith('.jsonl')) continue;
+          const p = join(dayDir, f);
+          try {
+            const s = statSync(p);
+            out.push({ path: p, mtimeMs: s.mtimeMs });
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function parseCodexFile(path: string): Promise<ParsedFile> {
+  const byDay = new Map<number, Record<string, Usage>>();
+  const sessionId = (path.split('/').pop() ?? path).replace(/\.jsonl$/, '');
+  let earliestEventMs: number | null = null;
+  let latestEventMs: number | null = null;
+  let cwd: string | undefined;
+
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    let evt: any;
+    try {
+      evt = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (evt?.type === 'session_meta' && typeof evt?.payload?.cwd === 'string') {
+      if (!cwd) cwd = evt.payload.cwd;
+    }
+
+    const ts = typeof evt?.timestamp === 'string' ? Date.parse(evt.timestamp) : NaN;
+    if (Number.isFinite(ts)) {
+      if (earliestEventMs === null || ts < earliestEventMs) earliestEventMs = ts;
+      if (latestEventMs === null || ts > latestEventMs) latestEventMs = ts;
+    }
+
+    if (evt?.type !== 'event_msg') continue;
+    if (evt?.payload?.type !== 'token_count') continue;
+    const info = evt?.payload?.info;
+    if (!info) continue;
+    const last = info.last_token_usage;
+    if (!last) continue;
+    if (!Number.isFinite(ts)) continue;
+
+    const day = startOfDay(ts);
+    const u: Partial<Usage> = {
+      input_tokens: numberOr0(last.input_tokens),
+      output_tokens: numberOr0(last.output_tokens) + numberOr0(last.reasoning_output_tokens),
+      cache_read_input_tokens: numberOr0(last.cached_input_tokens),
+      cache_creation_input_tokens: 0,
+    };
+    const bucket = byDay.get(day) ?? {};
+    bucket['codex'] = addUsage(bucket['codex'] ?? EMPTY_USAGE(), u);
+    byDay.set(day, bucket);
+  }
+
+  return { byDay, sessionId, earliestEventMs, latestEventMs, cwd };
 }
 
 /**

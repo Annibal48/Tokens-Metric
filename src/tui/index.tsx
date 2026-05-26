@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
-import { findActiveTranscript, listTranscripts } from '../core/parser.js';
+import { findMostRecentActiveTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
 import { detectAuth } from '../core/detect.js';
 import { categoryCostUSD, contextWindowSize, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
@@ -152,7 +152,7 @@ function App() {
     }
 
     async function rescan() {
-      const active = findActiveTranscript();
+      const active = findMostRecentActiveTranscript();
       if (active && active.path !== transcriptPath) await attach(active.path);
     }
 

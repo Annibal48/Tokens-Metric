@@ -12,6 +12,14 @@ export function claudeConfigPath(): string {
   return join(homedir(), '.claude.json');
 }
 
+export function codexHome(): string {
+  return join(homedir(), '.codex');
+}
+
+export function codexSessionsDir(): string {
+  return join(codexHome(), 'sessions');
+}
+
 interface ClaudeConfigSubset {
   userID?: unknown;
   opusProMigrationComplete?: unknown;

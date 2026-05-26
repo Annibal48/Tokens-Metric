@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { aggregateTranscript, findActiveTranscript } from '../core/parser.js';
+import { aggregateAnyTranscript, findMostRecentActiveTranscript } from '../core/parser.js';
 import { detectAuth } from '../core/detect.js';
 import { estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
 import { totalTokens } from '../core/types.js';
@@ -18,7 +18,7 @@ if (OPTS.help) {
  */
 async function main() {
   try {
-    const active = findActiveTranscript();
+    const active = findMostRecentActiveTranscript();
     const auth = detectAuth();
 
     if (!active) {
@@ -26,7 +26,7 @@ async function main() {
       return;
     }
 
-    const s = await aggregateTranscript(active.path);
+    const s = await aggregateAnyTranscript(active.path);
     const model = s.lastModel ?? 'unknown';
     const tot = totalTokens(s.totals);
     const cost = estimateCostUSD(model, s.totals);
