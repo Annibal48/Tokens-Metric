@@ -21,7 +21,7 @@ import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js'
 import { anonymizePath } from '../core/privacy.js';
 import { createRequire } from 'node:module';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
-import { checkForUpdate } from '../core/updater.js';
+import { checkForUpdate, markUpToDate } from '../core/updater.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json') as { version: string };
@@ -990,6 +990,7 @@ async function promptForUpdate(): Promise<void> {
       shell: true,
     });
     if (result.status === 0) {
+      markUpToDate(latest);
       process.stdout.write(`\n✓ Updated to v${latest} — restarting…\n\n`);
       spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', shell: false });
       process.exit(0);

@@ -1,6 +1,6 @@
 {
   "name": "tokens-metric",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Real-time token usage meter for Claude Code — statusline + Ink TUI.",
   "type": "module",
   "bin": {

@@ -41,6 +41,11 @@ function isNewer(latest: string, current: string): boolean {
   return (lPat ?? 0) > (cPat ?? 0);
 }
 
+/** Write the cache so the next startup skips the network call and shows no prompt. */
+export function markUpToDate(version: string): void {
+  writeCache(version);
+}
+
 /**
  * Checks npm registry for a newer version. Non-blocking — uses a 24h cache
  * so most startups skip the network call entirely.
