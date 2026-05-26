@@ -16,10 +16,16 @@ export interface BucketStats {
   sessions: Set<string>;
 }
 
+export interface DayStats {
+  dayStart: number;
+  byModel: Record<string, Usage>;
+}
+
 export interface HistorySnapshot {
   today: BucketStats;
   d7: BucketStats;
   d30: BucketStats;
+  last7Days: DayStats[];
   scannedFiles: number;
   generatedAt: number;
   oldestMtimeMs: number | null;
@@ -135,10 +141,17 @@ function aggregate(now: number): HistorySnapshot {
     if (ts !== null && (oldest === null || ts < oldest)) oldest = ts;
   }
 
+  // last7Days: the 7 most recent days with data, oldest→newest
+  const last7Days: DayStats[] = Array.from({ length: 7 }, (_, i) => ({
+    dayStart: startToday - (6 - i) * 86_400_000,
+    byModel: { ...(merged.get(startToday - (6 - i) * 86_400_000)?.byModel ?? {}) },
+  }));
+
   const snap: HistorySnapshot = {
     today: { byModel: {}, sessions: new Set() },
     d7: { byModel: {}, sessions: new Set() },
     d30: { byModel: {}, sessions: new Set() },
+    last7Days,
     scannedFiles: cache.size,
     generatedAt: now,
     oldestMtimeMs: oldest,
@@ -194,10 +207,15 @@ export function bucketTopModel(b: BucketStats): string | null {
 }
 
 function emptySnapshot(now: number, scannedFiles: number): HistorySnapshot {
+  const startToday = startOfDay(now);
   return {
     today: { byModel: {}, sessions: new Set() },
     d7: { byModel: {}, sessions: new Set() },
     d30: { byModel: {}, sessions: new Set() },
+    last7Days: Array.from({ length: 7 }, (_, i) => ({
+      dayStart: startToday - (6 - i) * 86_400_000,
+      byModel: {},
+    })),
     scannedFiles,
     generatedAt: now,
     oldestMtimeMs: null,

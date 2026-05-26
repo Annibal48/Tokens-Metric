@@ -14,10 +14,11 @@ import {
   bucketTopModel,
   getTodaySessions,
   type BucketStats,
+  type DayStats,
   type HistorySnapshot,
   type SessionSummary,
 } from '../core/history.js';
-import { totalTokens, type AuthInfo, type SessionStats } from '../core/types.js';
+import { totalTokens, type AuthInfo, type SessionStats, type Usage } from '../core/types.js';
 import { anonymizePath } from '../core/privacy.js';
 import { createRequire } from 'node:module';
 import { HELP_TEXT, parseArgs } from '../core/args.js';
@@ -703,36 +704,35 @@ function HistoryPanel({ history }: { history: HistorySnapshot | null }) {
         <Text bold={false} color="blue"> · refreshes every 60s</Text>
       </Text>
       {!history ? (
-        <Text dimColor>Scanning ~/.claude/projects…</Text>
+        <Text dimColor>Scanning…</Text>
       ) : history.scannedFiles === 0 ? (
         <Text dimColor>No transcripts found.</Text>
       ) : (
         <>
-          <HistoryRow label="" today="Today" d7="7d" d30="30d" dim />
-          <HistoryRow
-            label="Tokens "
-            today={fmtNumber(bucketTokens(history.today))}
-            d7={fmtNumber(bucketTokens(history.d7))}
-            d30={fmtNumber(bucketTokens(history.d30))}
-          />
-          <HistoryRow
-            label="Cost~  "
-            today={fmtCost(bucketCostUSD(history.today))}
-            d7={fmtCost(bucketCostUSD(history.d7))}
-            d30={fmtCost(bucketCostUSD(history.d30))}
-          />
-          <HistoryRow
-            label="Sessions"
-            today={String(history.today.sessions.size)}
-            d7={String(history.d7.sessions.size)}
-            d30={String(history.d30.sessions.size)}
-          />
-          <HistoryRow
-            label="Top model"
-            today={fmtTopModel(history.today)}
-            d7={fmtTopModel(history.d7)}
-            d30={fmtTopModel(history.d30)}
-          />
+          <Box marginTop={1}>
+            <DualBarChart days={history.last7Days} now={history.generatedAt} />
+          </Box>
+          <Box marginTop={1}>
+            <HistoryRow label="" today="Today" d7="7d" d30="30d" dim />
+            <HistoryRow
+              label="Tokens "
+              today={fmtNumber(bucketTokens(history.today))}
+              d7={fmtNumber(bucketTokens(history.d7))}
+              d30={fmtNumber(bucketTokens(history.d30))}
+            />
+            <HistoryRow
+              label="Cost~  "
+              today={fmtCost(bucketCostUSD(history.today))}
+              d7={fmtCost(bucketCostUSD(history.d7))}
+              d30={fmtCost(bucketCostUSD(history.d30))}
+            />
+            <HistoryRow
+              label="Sessions"
+              today={String(history.today.sessions.size)}
+              d7={String(history.d7.sessions.size)}
+              d30={String(history.d30.sessions.size)}
+            />
+          </Box>
           <Box marginTop={1}>
             <Text dimColor>
               {`scanned ${history.scannedFiles} transcripts`}
@@ -747,6 +747,84 @@ function HistoryPanel({ history }: { history: HistorySnapshot | null }) {
       )}
     </Box>
   );
+}
+
+// ── Dual bar chart ────────────────────────────────────────────────────────────
+const CHART_BAR_WIDTH = 28;
+
+function claudeTokens(byModel: Record<string, Usage>): number {
+  return Object.entries(byModel)
+    .filter(([m]) => m !== 'codex')
+    .reduce((s, [, u]) => s + totalTokens(u), 0);
+}
+
+function codexTokens(byModel: Record<string, Usage>): number {
+  return totalTokens(byModel['codex'] ?? { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+}
+
+function claudeCost(byModel: Record<string, Usage>): number {
+  return Object.entries(byModel)
+    .filter(([m]) => m !== 'codex')
+    .reduce((s, [m, u]) => s + (estimateCostUSD(m, u) ?? 0), 0);
+}
+
+function DualBarChart({ days, now }: { days: DayStats[]; now: number }) {
+  const maxTokens = Math.max(
+    1,
+    ...days.flatMap((d) => [claudeTokens(d.byModel), codexTokens(d.byModel)]),
+  );
+
+  const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const todayStart = (() => { const d = new Date(now); d.setHours(0,0,0,0); return d.getTime(); })();
+
+  return (
+    <Box flexDirection="column">
+      <Text bold dimColor>{'last 7 days'}</Text>
+      {days.map((day) => {
+        const ct = claudeTokens(day.byModel);
+        const cxt = codexTokens(day.byModel);
+        const cc = claudeCost(day.byModel);
+        const cxc = Object.entries(day.byModel)
+          .filter(([m]) => m === 'codex')
+          .reduce((s, [m, u]) => s + (estimateCostUSD(m, u) ?? 0), 0);
+        const isToday = day.dayStart === todayStart;
+        const label = isToday ? 'today' : DAY_LABELS[new Date(day.dayStart).getDay()];
+        const hasData = ct > 0 || cxt > 0;
+
+        return (
+          <Box key={day.dayStart} flexDirection="column" marginTop={1}>
+            <Text bold={isToday} color={isToday ? 'white' : undefined}>
+              {label.padEnd(6)}
+              {!hasData && <Text dimColor>  no data</Text>}
+            </Text>
+            {ct > 0 && (
+              <Text>
+                <Text dimColor>{'  claude  '}</Text>
+                <Text color="cyan">{solidBar(ct / maxTokens, CHART_BAR_WIDTH)}</Text>
+                <Text>{'  '}</Text>
+                <Text bold>{fmtNumber(ct).padStart(7)}</Text>
+                {cc > 0 && <Text dimColor>{`  ~${fmtUSD(cc)}`}</Text>}
+              </Text>
+            )}
+            {cxt > 0 && (
+              <Text>
+                <Text dimColor>{'  codex   '}</Text>
+                <Text color="magenta">{solidBar(cxt / maxTokens, CHART_BAR_WIDTH)}</Text>
+                <Text>{'  '}</Text>
+                <Text bold>{fmtNumber(cxt).padStart(7)}</Text>
+                {cxc > 0 && <Text dimColor>{`  ~${fmtUSD(cxc)}`}</Text>}
+              </Text>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+function solidBar(ratio: number, width: number): string {
+  const filled = Math.round(Math.min(1, ratio) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
 function fmtDate(ms: number): string {
