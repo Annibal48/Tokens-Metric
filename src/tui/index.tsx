@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
 import { findActiveTranscript, findActiveCodexTranscript, listTranscripts } from '../core/parser.js';
 import { tailTranscript, type TailHandle } from '../core/tailer.js';
-import { detectAuth } from '../core/detect.js';
+import { detectAuth, isCodexInstalled } from '../core/detect.js';
 import { categoryCostUSD, contextWindowSize, estimateCostUSD, fmtNumber, fmtUSD } from '../core/format.js';
 import {
   buildHistory,
@@ -41,6 +41,7 @@ const BAR_WIDTH = 20;
 function App() {
   const { exit } = useApp();
   const [auth] = useState<AuthInfo>(() => detectAuth());
+  const [codexDetected] = useState<boolean>(() => isCodexInstalled());
   // Claude source
   const [claudeStats, setClaudeStats] = useState<SessionStats | null>(null);
   const [claudePath, setClaudePath] = useState<string | null>(null);
@@ -235,6 +236,7 @@ function App() {
     <Box flexDirection="column" padding={1}>
       <Header
         auth={auth}
+        codexDetected={codexDetected}
         sessionsToday={today.sessions}
         projectsToday={today.projects}
         lastTailAt={lastTailAt}
@@ -292,6 +294,7 @@ function App() {
 // ── Header ───────────────────────────────────────────────────────────────────
 function Header({
   auth,
+  codexDetected,
   sessionsToday,
   projectsToday,
   lastTailAt,
@@ -300,6 +303,7 @@ function Header({
   updateAvailable,
 }: {
   auth: AuthInfo;
+  codexDetected: boolean;
   sessionsToday: number;
   projectsToday: number;
   lastTailAt: number | null;
@@ -324,6 +328,9 @@ function Header({
         <Text>
           <Text color={dot}>●</Text>{' '}
           {auth.installed ? 'Claude Code detected' : 'Claude Code NOT detected'}
+          <Text dimColor>{'   ·   '}</Text>
+          <Text color={codexDetected ? 'green' : 'red'}>●</Text>{' '}
+          {codexDetected ? 'Codex detected' : 'Codex NOT detected'}
           <Text dimColor>{'   ·   '}</Text>
           <Text>{sessionsToday}</Text>
           <Text dimColor>{` ${plural(sessionsToday, 'session', 'sessions')} · `}</Text>

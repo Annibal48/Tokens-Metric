@@ -20,6 +20,10 @@ export function codexSessionsDir(): string {
   return join(codexHome(), 'sessions');
 }
 
+export function isCodexInstalled(): boolean {
+  return existsSync(codexHome());
+}
+
 interface ClaudeConfigSubset {
   userID?: unknown;
   opusProMigrationComplete?: unknown;
