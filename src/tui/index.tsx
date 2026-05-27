@@ -1202,7 +1202,9 @@ async function promptForUpdate(): Promise<void> {
     if (result.status === 0) {
       markUpToDate(latest);
       process.stdout.write(`\n✓ Updated to v${latest} — restarting…\n\n`);
-      spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', shell: false });
+      // Restart via shell so PATH resolution finds the freshly installed binary,
+      // not the old script path that process.argv[1] still points to.
+      spawnSync('tokens-metric', process.argv.slice(2), { stdio: 'inherit', shell: true });
       process.exit(0);
     } else {
       process.stdout.write('\n✗ Install failed — starting current version anyway.\n\n');
