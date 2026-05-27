@@ -38,6 +38,8 @@ const RESCAN_MS = 3_000;
 const HISTORY_REFRESH_MS = 60_000;
 const SPARK_WIDTH = 32;
 const BAR_WIDTH = 20;
+const TIMELINE_LEN = 30; // one bucket per minute, 30-minute window
+const TIMELINE_ROWS = 8; // chart height in terminal rows
 
 function App() {
   const { exit } = useApp();
@@ -55,6 +57,11 @@ function App() {
   const [codexSeries, setCodexSeries] = useState<number[]>(() => Array(SPARK_WIDTH).fill(0));
   const [codexLastTailAt, setCodexLastTailAt] = useState<number | null>(null);
   const codexLastTotalRef = useRef(0);
+  // Per-minute token accumulators for the 30m timeline chart
+  const claudeMinuteAccRef = useRef(0);
+  const codexMinuteAccRef = useRef(0);
+  const [claudeTimeline, setClaudeTimeline] = useState<number[]>(() => Array(TIMELINE_LEN).fill(0));
+  const [codexTimeline, setCodexTimeline] = useState<number[]>(() => Array(TIMELINE_LEN).fill(0));
 
   const [now, setNow] = useState<number>(Date.now());
   const [history, setHistory] = useState<HistorySnapshot | null>(null);
@@ -134,6 +141,17 @@ function App() {
     return () => clearInterval(t);
   }, []);
 
+  // 30m timeline: push one bucket per minute and reset accumulators.
+  useEffect(() => {
+    const t = setInterval(() => {
+      setClaudeTimeline((prev) => [...prev.slice(1), claudeMinuteAccRef.current]);
+      claudeMinuteAccRef.current = 0;
+      setCodexTimeline((prev) => [...prev.slice(1), codexMinuteAccRef.current]);
+      codexMinuteAccRef.current = 0;
+    }, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   // Claude tailing
   useEffect(() => {
     let handle: TailHandle | null = null;
@@ -157,6 +175,7 @@ function App() {
             next[next.length - 1] = (next[next.length - 1] ?? 0) + delta;
             return next;
           });
+          claudeMinuteAccRef.current += delta;
         }
         claudeLastTotalRef.current = tot;
         setClaudeStats({ ...s });
@@ -201,6 +220,7 @@ function App() {
             next[next.length - 1] = (next[next.length - 1] ?? 0) + delta;
             return next;
           });
+          codexMinuteAccRef.current += delta;
         }
         codexLastTotalRef.current = tot;
         setCodexStats({ ...s });
@@ -271,7 +291,12 @@ function App() {
       {openTab !== null && (
         <Box marginTop={1}>
           {openTab === 1 && (
-            <BreakdownPanel stats={primaryStats} series={primarySeries} ratePerSec={primaryRate} />
+            <Box flexDirection="row" width="100%">
+              <BreakdownPanel stats={primaryStats} series={primarySeries} ratePerSec={primaryRate} />
+              <Box marginLeft={1}>
+                <TimelineChart claudeTimeline={claudeTimeline} codexTimeline={codexTimeline} />
+              </Box>
+            </Box>
           )}
           {openTab === 2 && <HistoryPanel history={history} />}
           {openTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} cursor={Math.min(sessionCursor, Math.max(0, todaySessions.length - 1))} />}
@@ -706,6 +731,67 @@ function BarRow({
       <Text dimColor>{`  ${pct.toFixed(1).padStart(5, ' ')}%`}</Text>
       {cost !== null && <Text dimColor>{`  ~${fmtUSD(cost)}`}</Text>}
     </Text>
+  );
+}
+
+// ── 30-minute timeline chart ─────────────────────────────────────────────────
+function TimelineChart({
+  claudeTimeline,
+  codexTimeline,
+}: {
+  claudeTimeline: number[];
+  codexTimeline: number[];
+}) {
+  const combined = claudeTimeline.map((c, i) => c + (codexTimeline[i] ?? 0));
+  const max = Math.max(1, ...combined);
+  const hasData = combined.some((v) => v > 0);
+  const N = claudeTimeline.length;
+
+  const fmtY = (v: number): string => {
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1_000) return `${Math.round(v / 1_000)}k`;
+    return String(Math.round(v));
+  };
+
+  const yLabel = (r: number): string => {
+    if (r === TIMELINE_ROWS - 1) return fmtY(max).padStart(5);
+    if (r === Math.floor(TIMELINE_ROWS / 2)) return fmtY(max / 2).padStart(5);
+    return '     ';
+  };
+
+  return (
+    <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+      <Text bold color="yellow">
+        {'activity '}
+        <Text bold={false} dimColor>· last 30m</Text>
+      </Text>
+      {Array.from({ length: TIMELINE_ROWS }, (_, i) => {
+        const r = TIMELINE_ROWS - 1 - i;
+        const threshold = (r / TIMELINE_ROWS) * max;
+        return (
+          <Text key={r}>
+            <Text dimColor>{yLabel(r)} │</Text>
+            {combined.map((v, c) => {
+              const filled = v > threshold;
+              const isCodex = filled && (codexTimeline[c] ?? 0) > threshold;
+              return (
+                <Text key={c} color={filled ? (isCodex ? 'magenta' : 'cyan') : undefined}>
+                  {filled ? '█' : ' '}
+                </Text>
+              );
+            })}
+          </Text>
+        );
+      })}
+      <Text dimColor>{'      └' + '─'.repeat(N)}</Text>
+      <Text dimColor>{`      -30m${' '.repeat(Math.max(0, N - 7))}now`}</Text>
+      <Box marginTop={1}>
+        {hasData
+          ? <Text dimColor>peak <Text color="white">{fmtY(max)}</Text>/min  ·  <Text color="cyan">█</Text> claude  <Text color="magenta">█</Text> codex</Text>
+          : <Text dimColor>filling… (1 bar/min)</Text>
+        }
+      </Box>
+    </Box>
   );
 }
 
