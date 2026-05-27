@@ -735,6 +735,8 @@ function BarRow({
 }
 
 // ── 30-minute timeline chart ─────────────────────────────────────────────────
+const PARTIAL_BLOCKS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
 function TimelineChart({
   claudeTimeline,
   codexTimeline,
@@ -743,8 +745,9 @@ function TimelineChart({
   codexTimeline: number[];
 }) {
   const combined = claudeTimeline.map((c, i) => c + (codexTimeline[i] ?? 0));
-  const max = Math.max(1, ...combined);
-  const hasData = combined.some((v) => v > 0);
+  const maxRaw = Math.max(...combined);
+  const hasData = maxRaw > 0;
+  const max = hasData ? maxRaw : 1;
   const N = claudeTimeline.length;
 
   const fmtY = (v: number): string => {
@@ -753,7 +756,9 @@ function TimelineChart({
     return String(Math.round(v));
   };
 
+  // Y axis labels: only when there is real data
   const yLabel = (r: number): string => {
+    if (!hasData) return '     ';
     if (r === TIMELINE_ROWS - 1) return fmtY(max).padStart(5);
     if (r === Math.floor(TIMELINE_ROWS / 2)) return fmtY(max / 2).padStart(5);
     return '     ';
@@ -766,17 +771,36 @@ function TimelineChart({
         <Text bold={false} dimColor>· last 30m</Text>
       </Text>
       {Array.from({ length: TIMELINE_ROWS }, (_, i) => {
-        const r = TIMELINE_ROWS - 1 - i;
-        const threshold = (r / TIMELINE_ROWS) * max;
+        const r = TIMELINE_ROWS - 1 - i; // r=ROWS-1 at top, r=0 at bottom
         return (
           <Text key={r}>
             <Text dimColor>{yLabel(r)} │</Text>
             {combined.map((v, c) => {
-              const filled = v > threshold;
-              const isCodex = filled && (codexTimeline[c] ?? 0) > threshold;
+              // fractional bar heights in row units
+              const totalH = (v / max) * TIMELINE_ROWS;
+              const codexH = ((codexTimeline[c] ?? 0) / max) * TIMELINE_ROWS;
+
+              if (totalH <= r) return <Text key={c}> </Text>;
+
+              // smooth top using partial block chars
+              const char = totalH >= r + 1
+                ? '█'
+                : (PARTIAL_BLOCKS[Math.max(1, Math.round((totalH - r) * 8))] ?? '█');
+
+              // stacked color: codex fills from bottom, claude on top
+              const isCodex = codexH > r + 0.5;
+              // oldest third dimmed, current minute (rightmost) bright
+              const isCurrentMinute = c === N - 1;
+              const isOld = c < Math.floor(N / 3);
+
               return (
-                <Text key={c} color={filled ? (isCodex ? 'magenta' : 'cyan') : undefined}>
-                  {filled ? '█' : ' '}
+                <Text
+                  key={c}
+                  color={isCodex ? 'magenta' : 'cyan'}
+                  dimColor={isOld && !isCurrentMinute}
+                  bold={isCurrentMinute}
+                >
+                  {char}
                 </Text>
               );
             })}
@@ -787,7 +811,7 @@ function TimelineChart({
       <Text dimColor>{`      -30m${' '.repeat(Math.max(0, N - 7))}now`}</Text>
       <Box marginTop={1}>
         {hasData
-          ? <Text dimColor>peak <Text color="white">{fmtY(max)}</Text>/min  ·  <Text color="cyan">█</Text> claude  <Text color="magenta">█</Text> codex</Text>
+          ? <Text dimColor>{'peak '}<Text color="white">{fmtY(max)}</Text>{'/min  ·  '}<Text color="cyan">{'█'}</Text>{' claude  '}<Text color="magenta">{'█'}</Text>{' codex'}</Text>
           : <Text dimColor>filling… (1 bar/min)</Text>
         }
       </Box>
