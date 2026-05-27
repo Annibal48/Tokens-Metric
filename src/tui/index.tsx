@@ -63,6 +63,7 @@ function App() {
   // openTab: which panel is expanded (null = all collapsed)
   const [focusedTab, setFocusedTab] = useState<1 | 2 | 3 | 4>(1);
   const [openTab, setOpenTab] = useState<1 | 2 | 3 | 4 | null>(null);
+  const [sessionCursor, setSessionCursor] = useState<number>(0);
   const startedAtRef = useRef<number>(Date.now());
 
   // useInput requires raw mode (interactive TTY). Skip it when stdin is piped
@@ -74,7 +75,12 @@ function App() {
     useInput((input, key) => {
       if (input === 'q' || (key.ctrl && input === 'c')) exit();
       if (key.escape) { setOpenTab(null); return; }
-      // Arrow keys move the cursor
+      // ↑↓ navigate sessions when Sessions tab is open
+      if (openTab === 3) {
+        if (key.upArrow)   { setSessionCursor((c) => Math.max(0, c - 1)); return; }
+        if (key.downArrow) { setSessionCursor((c) => c + 1); return; }
+      }
+      // Arrow keys move the tab cursor
       if (key.leftArrow)  { setFocusedTab((t) => (t > 1 ? (t - 1) as 1|2|3|4 : t)); return; }
       if (key.rightArrow) { setFocusedTab((t) => (t < 4 ? (t + 1) as 1|2|3|4 : t)); return; }
       // Enter opens/collapses the focused tab
@@ -268,7 +274,7 @@ function App() {
             <BreakdownPanel stats={primaryStats} series={primarySeries} ratePerSec={primaryRate} />
           )}
           {openTab === 2 && <HistoryPanel history={history} />}
-          {openTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} />}
+          {openTab === 3 && <TodaySessionsPanel sessions={todaySessions} now={now} cursor={Math.min(sessionCursor, Math.max(0, todaySessions.length - 1))} />}
           {openTab === 4 && (
             <TranscriptsPanel
               transcripts={transcripts}
@@ -284,8 +290,16 @@ function App() {
           <Text color="magenta">q</Text> quit ·{' '}
           <Text color="magenta">←→</Text> move ·{' '}
           <Text color="magenta">enter</Text> open/close ·{' '}
-          <Text color="magenta">1–4</Text> jump · pricing is{' '}
-          <Text italic>API-equivalent</Text>, not your real bill on a subscription
+          <Text color="magenta">1–4</Text> jump
+          {openTab === 3 && (
+            <Text dimColor>
+              {' · '}
+              <Text color="magenta">↑↓</Text> select session
+            </Text>
+          )}
+          <Text dimColor> · pricing is </Text>
+          <Text italic dimColor>API-equivalent</Text>
+          <Text dimColor>, not your real bill on a subscription</Text>
         </Text>
       </Box>
     </Box>
@@ -889,14 +903,23 @@ function fmtTopModel(b: BucketStats): string {
 }
 
 // ── Today's sessions panel ───────────────────────────────────────────────────
-function TodaySessionsPanel({ sessions, now }: { sessions: SessionSummary[]; now: number }) {
+function TodaySessionsPanel({
+  sessions,
+  now,
+  cursor,
+}: {
+  sessions: SessionSummary[];
+  now: number;
+  cursor: number;
+}) {
   return (
     <Box borderStyle="round" borderColor="blue" paddingX={1} flexDirection="column" width="100%">
       <Text bold color="blue">
         {"Today's sessions"}
         <Text bold={false} color="blue">{` · ${sessions.length} ${plural(sessions.length, 'session', 'sessions')} today`}</Text>
       </Text>
-      {sessions.map((s) => {
+      {sessions.map((s, idx) => {
+        const isSelected = idx === cursor;
         const tokens = Object.values(s.byModel).reduce(
           (acc, u) => acc + totalTokens(u),
           0,
@@ -919,25 +942,118 @@ function TodaySessionsPanel({ sessions, now }: { sessions: SessionSummary[]; now
             : null;
 
         return (
-          <Text key={s.sessionId}>
-            <Text color={s.isActive ? 'green' : 'gray'}>{s.isActive ? '▶ ' : '  '}</Text>
-            <Text bold={s.isActive}>
-              {s.startedAt ? fmtTime(s.startedAt) : '??:??'}
+          <Box key={s.sessionId} flexDirection="column">
+            <Text>
+              <Text color={isSelected ? 'cyan' : s.isActive ? 'green' : 'gray'}>
+                {isSelected ? '› ' : s.isActive ? '▶ ' : '  '}
+              </Text>
+              <Text bold={isSelected || s.isActive} color={isSelected ? 'cyan' : undefined}>
+                {s.startedAt ? fmtTime(s.startedAt) : '??:??'}
+              </Text>
+              <Text dimColor>{'  '}</Text>
+              <Text wrap="truncate-middle" dimColor={!isSelected && !s.isActive} color={isSelected ? 'cyan' : undefined}>
+                {OPTS.reveal ? (s.cwd ?? '—') : displayCwd(s.cwd)}
+              </Text>
+              <Text dimColor>{'  '}</Text>
+              <Text color="cyan">{topModel ? shortModel(topModel) : '—'}</Text>
+              <Text dimColor>{'  '}</Text>
+              <Text bold={isSelected}>{fmtNumber(tokens)}</Text>
+              {cost !== null && <Text dimColor>{`  ~${fmtUSD(cost)}`}</Text>}
+              {duration && <Text dimColor>{`  ${duration}`}</Text>}
+              {s.isActive && <Text color="green"> active</Text>}
             </Text>
-            <Text dimColor>{'  '}</Text>
-            <Text wrap="truncate-middle" dimColor={!s.isActive}>
-              {OPTS.reveal ? (s.cwd ?? '—') : displayCwd(s.cwd)}
-            </Text>
-            <Text dimColor>{'  '}</Text>
-            <Text color="cyan">{topModel ? shortModel(topModel) : '—'}</Text>
-            <Text dimColor>{'  '}</Text>
-            <Text>{fmtNumber(tokens)}</Text>
-            {cost !== null && <Text dimColor>{`  ~${fmtUSD(cost)}`}</Text>}
-            {duration && <Text dimColor>{`  ${duration}`}</Text>}
-            {s.isActive && <Text color="green"> active</Text>}
-          </Text>
+            {isSelected && <SessionDetail session={s} />}
+          </Box>
         );
       })}
+    </Box>
+  );
+}
+
+function SessionDetail({ session: s }: { session: SessionSummary }) {
+  const DETAIL_BAR = 16;
+  // Aggregate all models into one Usage for the bar chart
+  const totals: Usage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  for (const u of Object.values(s.byModel)) {
+    totals.input_tokens += u.input_tokens;
+    totals.output_tokens += u.output_tokens;
+    totals.cache_creation_input_tokens += u.cache_creation_input_tokens;
+    totals.cache_read_input_tokens += u.cache_read_input_tokens;
+  }
+  const total = totalTokens(totals);
+  const max = Math.max(1, totals.input_tokens, totals.output_tokens, totals.cache_creation_input_tokens, totals.cache_read_input_tokens);
+  const allModels = Object.keys(s.byModel);
+  const primaryModel = allModels.reduce<string | null>(
+    (best, m) => best === null || totalTokens(s.byModel[m]!) > totalTokens(s.byModel[best]!) ? m : best,
+    null,
+  ) ?? '';
+  const totalCost = Object.entries(s.byModel).reduce<number | null>((acc, [m, u]) => {
+    const c = estimateCostUSD(m, u);
+    if (c === null) return acc;
+    return (acc ?? 0) + c;
+  }, null);
+
+  return (
+    <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+      <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+        <Box flexDirection="column">
+          <Text>
+            <Text bold>Input    </Text>
+            <Text color="cyan">{bar(totals.input_tokens / max, DETAIL_BAR)}</Text>
+            <Text>  {fmtNumber(totals.input_tokens).padStart(7)}</Text>
+            <Text dimColor>{`  ${total > 0 ? ((totals.input_tokens / total) * 100).toFixed(1).padStart(5) : '  0.0'}%`}</Text>
+            {(() => { const c = categoryCostUSD(primaryModel, 'input', totals.input_tokens); return c !== null ? <Text dimColor>{`  ~${fmtUSD(c)}`}</Text> : null; })()}
+          </Text>
+          <Text>
+            <Text bold>Output   </Text>
+            <Text color="green">{bar(totals.output_tokens / max, DETAIL_BAR)}</Text>
+            <Text>  {fmtNumber(totals.output_tokens).padStart(7)}</Text>
+            <Text dimColor>{`  ${total > 0 ? ((totals.output_tokens / total) * 100).toFixed(1).padStart(5) : '  0.0'}%`}</Text>
+            {(() => { const c = categoryCostUSD(primaryModel, 'output', totals.output_tokens); return c !== null ? <Text dimColor>{`  ~${fmtUSD(c)}`}</Text> : null; })()}
+          </Text>
+          {totals.cache_creation_input_tokens > 0 && (
+            <Text>
+              <Text bold>C.write  </Text>
+              <Text color="yellow">{bar(totals.cache_creation_input_tokens / max, DETAIL_BAR)}</Text>
+              <Text>  {fmtNumber(totals.cache_creation_input_tokens).padStart(7)}</Text>
+              <Text dimColor>{`  ${total > 0 ? ((totals.cache_creation_input_tokens / total) * 100).toFixed(1).padStart(5) : '  0.0'}%`}</Text>
+              {(() => { const c = categoryCostUSD(primaryModel, 'cacheWrite', totals.cache_creation_input_tokens); return c !== null ? <Text dimColor>{`  ~${fmtUSD(c)}`}</Text> : null; })()}
+            </Text>
+          )}
+          {totals.cache_read_input_tokens > 0 && (
+            <Text>
+              <Text bold>C.read   </Text>
+              <Text color="magenta">{bar(totals.cache_read_input_tokens / max, DETAIL_BAR)}</Text>
+              <Text>  {fmtNumber(totals.cache_read_input_tokens).padStart(7)}</Text>
+              <Text dimColor>{`  ${total > 0 ? ((totals.cache_read_input_tokens / total) * 100).toFixed(1).padStart(5) : '  0.0'}%`}</Text>
+              {(() => { const c = categoryCostUSD(primaryModel, 'cacheRead', totals.cache_read_input_tokens); return c !== null ? <Text dimColor>{`  ~${fmtUSD(c)}`}</Text> : null; })()}
+            </Text>
+          )}
+        </Box>
+        <Text dimColor>{'─'.repeat(DETAIL_BAR + 32)}</Text>
+        <Text>
+          <Text bold>{'Total    '}</Text>
+          <Text bold>{fmtNumber(total).padStart(DETAIL_BAR + 2 + 7)}</Text>
+          {totalCost !== null && <Text dimColor>{`         ~${fmtUSD(totalCost)}`}</Text>}
+        </Text>
+        {allModels.length > 1 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor>by model</Text>
+            {allModels.map((m) => {
+              const mu = s.byModel[m]!;
+              const mc = estimateCostUSD(m, mu);
+              return (
+                <Text key={m}>
+                  <Text color="cyan">  {shortModel(m)}</Text>
+                  <Text dimColor>  Σ </Text>
+                  <Text>{fmtNumber(totalTokens(mu))}</Text>
+                  {mc !== null && <Text dimColor>{`  ~${fmtUSD(mc)}`}</Text>}
+                </Text>
+              );
+            })}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
